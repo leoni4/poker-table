@@ -153,7 +153,7 @@ describe('Result type', () => {
   describe('mapErr', () => {
     it('should not map Ok value', () => {
       const result = ok(42);
-      const mapped = mapErr(result, (e) => `Error: ${e}`);
+      const mapped = mapErr(result, (e) => `Error: ${e as string}`);
 
       expect(isOk(mapped)).toBe(true);
       if (isOk(mapped)) {
