@@ -53,3 +53,21 @@ export {
 
 // Error codes and utilities
 export { ErrorCode, PokerError, createError, isPokerError } from './errors.js';
+
+// Table configuration and state types
+export {
+  PlayerId,
+  createPlayerId,
+  RakeConfig,
+  TableConfig,
+  PlayerStatus,
+  HoleCards,
+  PlayerState,
+  PotState,
+  TablePhase,
+  TableState,
+  createDefaultTableConfig,
+  isValidTableConfig,
+  isPlayerStatus,
+  isTablePhase,
+} from './table.js';
