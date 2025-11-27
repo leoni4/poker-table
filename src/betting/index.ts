@@ -9,3 +9,10 @@ export {
   getAvailableActions,
   validateAction,
 } from './actions.js';
+
+export {
+  startBettingRound,
+  applyActionToBettingRound,
+  isBettingRoundComplete,
+  getBettingRoundInfo,
+} from './round.js';

@@ -226,7 +226,7 @@ export function validateAction(
       }
       return ok(undefined);
 
-    case 'CALL':
+    case 'CALL': {
       // Cannot call if there's no amount to call
       if (callAmount === 0n) {
         return err(
@@ -237,27 +237,31 @@ export function validateAction(
         );
       }
 
-      // Check if player has enough chips to call
-      if (player.stack < callAmount) {
+      // Player must have some chips to call
+      if (player.stack === 0n) {
         return err(
           createError(
             ErrorCode.INSUFFICIENT_STACK,
-            `Player ${playerId} has insufficient chips (${player.stack}) to call ${callAmount}`
+            `Player ${playerId} has no chips to call`
           )
         );
       }
 
-      // Amount should match call amount
-      if (action.amount !== undefined && action.amount !== callAmount) {
+      // If player doesn't have enough to call, they can still call all-in
+      // Amount should match call amount or player's stack (whichever is smaller)
+      const maxCallAmount =
+        player.stack < callAmount ? player.stack : callAmount;
+      if (action.amount !== undefined && action.amount !== maxCallAmount) {
         return err(
           createError(
             ErrorCode.INVALID_BET_AMOUNT,
-            `CALL amount must be ${callAmount}, but got ${action.amount}`
+            `CALL amount must be ${maxCallAmount}, but got ${action.amount}`
           )
         );
       }
 
       return ok(undefined);
+    }
 
     case 'BET':
       // Cannot bet if there's already a bet

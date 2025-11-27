@@ -408,7 +408,7 @@ describe('validateAction', () => {
       }
     });
 
-    it('fails when player has insufficient chips', () => {
+    it('allows calling all-in when player has insufficient chips to full call', () => {
       const tableState = createTestTableState({
         players: [
           {
@@ -438,10 +438,8 @@ describe('validateAction', () => {
         action
       );
 
-      expect(isErr(result)).toBe(true);
-      if (isErr(result)) {
-        expect(result.error.code).toBe(ErrorCode.INSUFFICIENT_STACK);
-      }
+      // Should succeed - player can call all-in with their 50 chips
+      expect(isOk(result)).toBe(true);
     });
 
     it('fails when call amount does not match', () => {
