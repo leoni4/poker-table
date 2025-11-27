@@ -11,3 +11,6 @@ export * from './rng/index.js';
 
 // Re-export deck types and utilities
 export * from './deck/index.js';
+
+// Re-export hand evaluation types and utilities
+export * from './hand-eval/index.js';
