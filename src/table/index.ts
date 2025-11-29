@@ -14,6 +14,13 @@ import {
 import { ChipAmount } from '../core/money.js';
 import { Result, ok, err } from '../core/result.js';
 import { PokerError, createError, ErrorCode } from '../core/errors.js';
+import { Deck, createShuffledDeck } from '../deck/deck.js';
+import { createRngFromConfig } from '../rng/factory.js';
+import {
+  PlayerAction,
+  applyActionToBettingRound,
+  isBettingRoundComplete,
+} from '../betting/index.js';
 
 /**
  * Table error type for seat management operations
@@ -47,6 +54,7 @@ export class Table {
   private config: TableConfig;
   private state: TableState;
   private rebuyOptions: RebuyOptions;
+  private deck: Deck | null = null;
 
   constructor(config: TableConfig, rebuyOptions: RebuyOptions = {}) {
     this.config = config;
@@ -300,6 +308,43 @@ export class Table {
     if (player.status === PlayerStatus.SittingOut) {
       player.status = PlayerStatus.Active;
     }
+
+    return ok(this.getState());
+  }
+
+  /**
+   * Start a complete hand including deck creation, card dealing, and blind posting
+   * @returns Result with updated table state or error
+   */
+  startHand(): Result<TableState, TableError> {
+    // First, post blinds using existing method
+    const blindResult = this.startNewHand();
+    if (!blindResult.ok) {
+      return blindResult;
+    }
+
+    // Create and shuffle deck
+    const rng = createRngFromConfig(this.config);
+    this.deck = createShuffledDeck(rng);
+
+    // Deal hole cards to active players
+    const activePlayersWithCards = this.state.players.filter(
+      (p) => p.status === PlayerStatus.Active || p.status === PlayerStatus.AllIn
+    );
+
+    const holeCardsResult = this.deck.dealHoleCards(
+      activePlayersWithCards.length
+    );
+    if (!holeCardsResult.ok) {
+      return err(
+        createError(ErrorCode.INVALID_STATE, 'Failed to deal hole cards')
+      );
+    }
+
+    // Assign hole cards to players
+    activePlayersWithCards.forEach((player, index) => {
+      player.holeCards = { cards: holeCardsResult.value[index] };
+    });
 
     return ok(this.getState());
   }
@@ -600,6 +645,150 @@ export class Table {
       firstToActSeat = this.getNextActiveSeat(bbSeat);
     }
 
+    const firstPlayer = this.getPlayerAtSeat(firstToActSeat);
+    this.state.currentPlayerId = firstPlayer?.id;
+  }
+
+  /**
+   * Apply a player action and advance the hand state
+   * @param playerId - The player performing the action
+   * @param action - The action to perform
+   * @returns Result with updated table state or error
+   */
+  applyAction(
+    playerId: PlayerId,
+    action: PlayerAction
+  ): Result<TableState, TableError> {
+    // Apply action to betting round
+    const actionResult = applyActionToBettingRound(
+      this.state,
+      playerId,
+      action
+    );
+    if (!actionResult.ok) {
+      return actionResult;
+    }
+
+    this.state = actionResult.value;
+
+    // Check if betting round is complete
+    if (isBettingRoundComplete(this.state)) {
+      // Check if only one player remains (all others folded)
+      const activePlayers = this.state.players.filter(
+        (p) =>
+          p.status === PlayerStatus.Active || p.status === PlayerStatus.AllIn
+      );
+
+      if (activePlayers.length <= 1) {
+        // Hand is over, transition to showdown/completion
+        this.state.phase = TablePhase.Showdown;
+        this.state.currentPlayerId = undefined;
+        return ok(this.getState());
+      }
+
+      // Advance to next street
+      return this.advanceStreet();
+    }
+
+    return ok(this.getState());
+  }
+
+  /**
+   * Advance to the next street (flop -> turn -> river -> showdown)
+   * @private
+   */
+  private advanceStreet(): Result<TableState, TableError> {
+    if (!this.deck) {
+      return err(createError(ErrorCode.INVALID_STATE, 'No deck available'));
+    }
+
+    // Reset committed amounts for new betting round
+    for (const player of this.state.players) {
+      player.committed = 0n;
+    }
+
+    switch (this.state.phase) {
+      case TablePhase.Preflop: {
+        // Deal flop
+        const flopResult = this.deck.dealFlop();
+        if (!flopResult.ok) {
+          return err(
+            createError(ErrorCode.INVALID_STATE, 'Failed to deal flop')
+          );
+        }
+        this.state.communityCards = [...flopResult.value];
+        this.state.phase = TablePhase.Flop;
+        break;
+      }
+
+      case TablePhase.Flop: {
+        // Deal turn
+        const turnResult = this.deck.dealCommunityCard();
+        if (!turnResult.ok) {
+          return err(
+            createError(ErrorCode.INVALID_STATE, 'Failed to deal turn')
+          );
+        }
+        this.state.communityCards.push(turnResult.value);
+        this.state.phase = TablePhase.Turn;
+        break;
+      }
+
+      case TablePhase.Turn: {
+        // Deal river
+        const riverResult = this.deck.dealCommunityCard();
+        if (!riverResult.ok) {
+          return err(
+            createError(ErrorCode.INVALID_STATE, 'Failed to deal river')
+          );
+        }
+        this.state.communityCards.push(riverResult.value);
+        this.state.phase = TablePhase.River;
+        break;
+      }
+
+      case TablePhase.River: {
+        // Go to showdown
+        this.state.phase = TablePhase.Showdown;
+        this.state.currentPlayerId = undefined;
+        return ok(this.getState());
+      }
+
+      default:
+        return err(
+          createError(
+            ErrorCode.INVALID_STATE,
+            'Invalid phase for street advance'
+          )
+        );
+    }
+
+    // Set first to act for new betting round (after dealer)
+    this.setFirstToActPostFlop();
+
+    return ok(this.getState());
+  }
+
+  /**
+   * Set first player to act post-flop (first active player after dealer)
+   * @private
+   */
+  private setFirstToActPostFlop(): void {
+    if (this.state.dealerSeat === undefined) {
+      return;
+    }
+
+    const activePlayers = this.state.players.filter(
+      (p) => p.status === PlayerStatus.Active
+    );
+
+    if (activePlayers.length === 0) {
+      this.state.currentPlayerId = undefined;
+      return;
+    }
+
+    // Post-flop action starts with first active player after dealer
+    const firstToActSeat = this.getNextActiveSeat(this.state.dealerSeat);
     const firstPlayer = this.getPlayerAtSeat(firstToActSeat);
     this.state.currentPlayerId = firstPlayer?.id;
   }
