@@ -189,6 +189,12 @@ export interface TableState {
   handId: number;
 
   /**
+   * Dealer button seat position (0-based)
+   * undefined if no hand has been dealt yet
+   */
+  dealerSeat?: number;
+
+  /**
    * List of all players at the table
    */
   players: PlayerState[];
