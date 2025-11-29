@@ -14,3 +14,6 @@ export * from './deck/index.js';
 
 // Re-export hand evaluation types and utilities
 export * from './hand-eval/index.js';
+
+// Re-export table management types and utilities
+export * from './table/index.js';
