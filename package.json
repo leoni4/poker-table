@@ -1,6 +1,6 @@
 {
   "name": "@leoni4/poker-table",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "High-performance single-table No-Limit Texas Hold'em poker engine for Node.js",
   "type": "module",
   "main": "./dist/index.js",
