@@ -3,6 +3,9 @@
  * High-performance poker engine for No-Limit Texas Hold'em
  */
 
+// Re-export main HoldemTable class (primary API)
+export { HoldemTable, createHoldemTable } from './holdem-table.js';
+
 // Re-export all core types and utilities
 export * from './core/index.js';
 
@@ -16,4 +19,33 @@ export * from './deck/index.js';
 export * from './hand-eval/index.js';
 
 // Re-export table management types and utilities
-export * from './table/index.js';
+export { Table, createTable, RebuyOptions } from './table/index.js';
+
+// Re-export betting types and utilities
+export {
+  PlayerAction,
+  PlayerActionType,
+  getAvailableActions,
+  validateAction,
+  startBettingRound,
+  applyActionToBettingRound,
+  isBettingRoundComplete,
+  getBettingRoundInfo,
+} from './betting/index.js';
+
+// Re-export history types and utilities
+export {
+  HandHistory,
+  HandEvent,
+  HandStartedEvent,
+  BlindsPostedEvent,
+  CardsDealtEvent,
+  ActionTakenEvent,
+  StreetEndedEvent,
+  ShowdownEvent,
+  PotDistributedEvent,
+  HandEndedEvent,
+  handHistoryToJSON,
+  handHistoryFromJSON,
+  createHandHistory,
+} from './history/index.js';
