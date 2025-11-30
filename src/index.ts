@@ -32,3 +32,20 @@ export {
   isBettingRoundComplete,
   getBettingRoundInfo,
 } from './betting/index.js';
+
+// Re-export history types and utilities
+export {
+  HandHistory,
+  HandEvent,
+  HandStartedEvent,
+  BlindsPostedEvent,
+  CardsDealtEvent,
+  ActionTakenEvent,
+  StreetEndedEvent,
+  ShowdownEvent,
+  PotDistributedEvent,
+  HandEndedEvent,
+  handHistoryToJSON,
+  handHistoryFromJSON,
+  createHandHistory,
+} from './history/index.js';

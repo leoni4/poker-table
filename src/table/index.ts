@@ -21,6 +21,7 @@ import {
   applyActionToBettingRound,
   isBettingRoundComplete,
 } from '../betting/index.js';
+import { HandHistory } from '../history/index.js';
 
 /**
  * Table error type for seat management operations
@@ -55,6 +56,8 @@ export class Table {
   private state: TableState;
   private rebuyOptions: RebuyOptions;
   private deck: Deck | null = null;
+  private currentHandHistory: HandHistory | null = null;
+  private lastHandHistory: HandHistory | null = null;
 
   constructor(config: TableConfig, rebuyOptions: RebuyOptions = {}) {
     this.config = config;
@@ -808,6 +811,22 @@ export class Table {
 
     // This should never happen as we check for table full before calling this
     return 0;
+  }
+
+  /**
+   * Get the current hand history (hand in progress)
+   * @returns Current hand history or null if no hand is active
+   */
+  getCurrentHandHistory(): HandHistory | null {
+    return this.currentHandHistory;
+  }
+
+  /**
+   * Get the last completed hand history
+   * @returns Last hand history or null if no hands have been completed
+   */
+  getLastHandHistory(): HandHistory | null {
+    return this.lastHandHistory;
   }
 }
 

@@ -184,6 +184,31 @@ export class HoldemTable {
   ): Result<TableState, PokerError> {
     return this.table.applyAction(playerId, action);
   }
+
+  /**
+   * Get the current hand history (hand in progress)
+   *
+   * Returns the history of the current hand including all events that have
+   * occurred so far. Returns null if no hand is currently in progress.
+   *
+   * @returns Current hand history or null
+   */
+  getCurrentHandHistory(): ReturnType<Table['getCurrentHandHistory']> {
+    return this.table.getCurrentHandHistory();
+  }
+
+  /**
+   * Get the last completed hand history
+   *
+   * Returns the history of the most recently completed hand. This is useful
+   * for reviewing what happened in the previous hand. Returns null if no
+   * hands have been completed yet.
+   *
+   * @returns Last hand history or null
+   */
+  getLastHandHistory(): ReturnType<Table['getLastHandHistory']> {
+    return this.table.getLastHandHistory();
+  }
 }
 
 /**
