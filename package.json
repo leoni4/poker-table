@@ -1,31 +1,50 @@
 {
-  "name": "poker-table",
-  "version": "1.0.0",
-  "description": "High-performance poker engine for a single No-Limit Texas Hold'em table",
+  "name": "@leoni4/poker-table",
+  "version": "0.1.0",
+  "description": "High-performance single-table No-Limit Texas Hold'em poker engine for Node.js",
   "type": "module",
   "main": "./dist/index.js",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
     }
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint",
+    "lint": "eslint src tests --ext .ts",
     "typecheck": "tsc --noEmit",
-    "prepare": "husky"
+    "prepare": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leoni4/poker-table.git"
   },
   "keywords": [
     "poker",
+    "nlhe",
     "texas-holdem",
-    "game-engine"
+    "poker-engine",
+    "poker-bots",
+    "poker-table"
   ],
-  "author": "",
+  "author": "Leo <you@example.com>",
   "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@types/node": "^24.10.1",

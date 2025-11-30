@@ -1,10 +1,10 @@
-# Poker Table
+# @leoni4/poker-table
 
-High-performance poker engine for single-table No-Limit Texas Hold'em.
+High-performance single-table No-Limit Texas Hold'em poker engine for Node.js.
 
 ## What is Poker Table?
 
-Poker Table is a TypeScript-based poker engine that simulates a complete No-Limit Texas Hold'em table. It handles all game mechanics including:
+A TypeScript-based poker engine that simulates a complete No-Limit Texas Hold'em table. It handles all game mechanics including:
 
 - **Player management**: Seating, removing, and rebuy operations
 - **Hand flow**: Blind posting, card dealing, betting rounds, and showdown
@@ -15,23 +15,8 @@ Poker Table is a TypeScript-based poker engine that simulates a complete No-Limi
 
 ## Installation
 
-### Local Development
-
-Clone the repository and install dependencies:
-
 ```bash
-git clone <repository-url>
-cd poker-table
-npm install
-npm run build
-```
-
-### As a Dependency (Future)
-
-Once published to npm:
-
-```bash
-npm install poker-table
+npm install @leoni4/poker-table
 ```
 
 ## Quick Start
@@ -46,7 +31,7 @@ import {
   chips,
   TablePhase,
   isOk,
-} from 'poker-table';
+} from '@leoni4/poker-table';
 
 // Create a table with default configuration
 const config = createDefaultTableConfig();
@@ -122,7 +107,7 @@ console.log('Final pot distribution:', state.pots);
 #### Using Default Configuration
 
 ```typescript
-import { HoldemTable, createDefaultTableConfig } from 'poker-table';
+import { HoldemTable, createDefaultTableConfig } from '@leoni4/poker-table';
 
 const config = createDefaultTableConfig();
 // Default: 2-10 players, 1/2 blinds
@@ -132,7 +117,7 @@ const table = new HoldemTable(config);
 #### Custom Configuration
 
 ```typescript
-import { HoldemTable, chips } from 'poker-table';
+import { HoldemTable, chips } from '@leoni4/poker-table';
 
 const config = {
   minPlayers: 2,
@@ -165,7 +150,7 @@ const table = new HoldemTable(config, {
 ### Seating Players
 
 ```typescript
-import { createPlayerId, chips, isOk } from 'poker-table';
+import { createPlayerId, chips, isOk } from '@leoni4/poker-table';
 
 const playerId = createPlayerId('player-123');
 const result = table.seatPlayer(playerId, chips(1000));
@@ -201,7 +186,7 @@ if (isOk(result)) {
 All actions return a `Result` that must be checked:
 
 ```typescript
-import { PlayerAction } from 'poker-table';
+import { PlayerAction } from '@leoni4/poker-table';
 
 // Fold
 const foldAction: PlayerAction = { type: 'FOLD' };
@@ -273,7 +258,7 @@ for (const pot of state.pots) {
 Here's a robust game loop for processing a complete hand:
 
 ```typescript
-import { TablePhase, isOk } from 'poker-table';
+import { TablePhase, isOk } from '@leoni4/poker-table';
 
 // Start hand
 const startResult = table.startHand();
