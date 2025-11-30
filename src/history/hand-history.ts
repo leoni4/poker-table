@@ -6,6 +6,8 @@ import { TableConfig } from '../core/table.js';
 import { HandEvent } from './events.js';
 import { Card, cardToString, parseCard } from '../core/card.js';
 import { ChipAmount } from '../core/money.js';
+import { PlayerId, TablePhase } from '../core/table.js';
+import { PlayerActionType } from '../betting/actions.js';
 
 /**
  * Complete history of a poker hand
@@ -66,37 +68,133 @@ interface SerializableTableConfig {
 }
 
 /**
- * Serializable event (converts bigint and Card to strings)
+ * Base serializable event
  */
-type SerializableHandEvent = {
-  [K in keyof HandEvent]: HandEvent[K] extends ChipAmount
-    ? string
-    : HandEvent[K] extends Card
-      ? string
-      : HandEvent[K] extends Array<infer U>
-        ? U extends Card
-          ? string[]
-          : U extends { amount: ChipAmount }
-            ? Array<Omit<U, 'amount'> & { amount: string }>
-            : U extends { cards: [Card, Card] }
-              ? Array<Omit<U, 'cards'> & { cards: [string, string] }>
-              : U extends { communityCards: Card[] }
-                ? Array<
-                    Omit<U, 'communityCards'> & { communityCards: string[] }
-                  >
-                : U extends { stack: ChipAmount }
-                  ? Array<Omit<U, 'stack'> & { stack: string }>
-                  : U extends { finalStack: ChipAmount }
-                    ? Array<Omit<U, 'finalStack'> & { finalStack: string }>
-                    : HandEvent[K]
-        : HandEvent[K] extends { cards: [Card, Card] } | undefined
-          ?
-              | (Omit<NonNullable<HandEvent[K]>, 'cards'> & {
-                  cards: [string, string];
-                })
-              | undefined
-          : HandEvent[K];
-};
+interface SerializableBaseEvent {
+  type: string;
+  timestamp: number;
+}
+
+/**
+ * Serializable HandStartedEvent
+ */
+interface SerializableHandStartedEvent extends SerializableBaseEvent {
+  type: 'HAND_STARTED';
+  handId: number;
+  dealerSeat: number;
+  players: Array<{
+    id: PlayerId;
+    seat: number;
+    stack: string;
+  }>;
+}
+
+/**
+ * Serializable BlindsPostedEvent
+ */
+interface SerializableBlindsPostedEvent extends SerializableBaseEvent {
+  type: 'BLINDS_POSTED';
+  smallBlind?: {
+    playerId: PlayerId;
+    amount: string;
+  };
+  bigBlind?: {
+    playerId: PlayerId;
+    amount: string;
+  };
+  straddle?: {
+    playerId: PlayerId;
+    amount: string;
+  };
+  antes?: Array<{
+    playerId: PlayerId;
+    amount: string;
+  }>;
+}
+
+/**
+ * Serializable CardsDealtEvent
+ */
+interface SerializableCardsDealtEvent extends SerializableBaseEvent {
+  type: 'CARDS_DEALT';
+  players: Array<{
+    playerId: PlayerId;
+    cards: [string, string];
+  }>;
+}
+
+/**
+ * Serializable ActionTakenEvent
+ */
+interface SerializableActionTakenEvent extends SerializableBaseEvent {
+  type: 'ACTION_TAKEN';
+  playerId: PlayerId;
+  action: PlayerActionType;
+  amount?: string;
+  allIn?: boolean;
+}
+
+/**
+ * Serializable StreetEndedEvent
+ */
+interface SerializableStreetEndedEvent extends SerializableBaseEvent {
+  type: 'STREET_ENDED';
+  street: TablePhase;
+  communityCards: string[];
+  potTotal: string;
+}
+
+/**
+ * Serializable ShowdownEvent
+ */
+interface SerializableShowdownEvent extends SerializableBaseEvent {
+  type: 'SHOWDOWN';
+  players: Array<{
+    playerId: PlayerId;
+    cards?: [string, string];
+    mucked?: boolean;
+  }>;
+}
+
+/**
+ * Serializable PotDistributedEvent
+ */
+interface SerializablePotDistributedEvent extends SerializableBaseEvent {
+  type: 'POT_DISTRIBUTED';
+  pots: Array<{
+    amount: string;
+    winners: Array<{
+      playerId: PlayerId;
+      share: string;
+    }>;
+  }>;
+}
+
+/**
+ * Serializable HandEndedEvent
+ */
+interface SerializableHandEndedEvent extends SerializableBaseEvent {
+  type: 'HAND_ENDED';
+  handId: number;
+  winnersByFold?: boolean;
+  finalPlayers: Array<{
+    id: PlayerId;
+    finalStack: string;
+  }>;
+}
+
+/**
+ * Union type of all serializable events
+ */
+type SerializableHandEvent =
+  | SerializableHandStartedEvent
+  | SerializableBlindsPostedEvent
+  | SerializableCardsDealtEvent
+  | SerializableActionTakenEvent
+  | SerializableStreetEndedEvent
+  | SerializableShowdownEvent
+  | SerializablePotDistributedEvent
+  | SerializableHandEndedEvent;
 
 /**
  * Convert ChipAmount (bigint) to string for JSON serialization
@@ -161,25 +259,30 @@ function deserializeTableConfig(config: SerializableTableConfig): TableConfig {
 /**
  * Serialize a single event
  */
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access */
-function serializeEvent(event: HandEvent): any {
-  const serialized: any = {
-    type: event.type,
+function serializeEvent(event: HandEvent): SerializableHandEvent {
+  const base = {
     timestamp: event.timestamp,
   };
 
   switch (event.type) {
     case 'HAND_STARTED':
-      serialized.handId = event.handId;
-      serialized.dealerSeat = event.dealerSeat;
-      serialized.players = event.players.map((p) => ({
-        id: p.id,
-        seat: p.seat,
-        stack: serializeChipAmount(p.stack),
-      }));
-      break;
+      return {
+        ...base,
+        type: 'HAND_STARTED',
+        handId: event.handId,
+        dealerSeat: event.dealerSeat,
+        players: event.players.map((p) => ({
+          id: p.id,
+          seat: p.seat,
+          stack: serializeChipAmount(p.stack),
+        })),
+      };
 
-    case 'BLINDS_POSTED':
+    case 'BLINDS_POSTED': {
+      const serialized: SerializableBlindsPostedEvent = {
+        ...base,
+        type: 'BLINDS_POSTED',
+      };
       if (event.smallBlind) {
         serialized.smallBlind = {
           playerId: event.smallBlind.playerId,
@@ -204,70 +307,88 @@ function serializeEvent(event: HandEvent): any {
           amount: serializeChipAmount(a.amount),
         }));
       }
-      break;
+      return serialized;
+    }
 
     case 'CARDS_DEALT':
-      serialized.players = event.players.map((p) => ({
-        playerId: p.playerId,
-        cards: [cardToString(p.cards[0]), cardToString(p.cards[1])],
-      }));
-      break;
+      return {
+        ...base,
+        type: 'CARDS_DEALT',
+        players: event.players.map((p) => ({
+          playerId: p.playerId,
+          cards: [cardToString(p.cards[0]), cardToString(p.cards[1])],
+        })),
+      };
 
-    case 'ACTION_TAKEN':
-      serialized.playerId = event.playerId;
-      serialized.action = event.action;
+    case 'ACTION_TAKEN': {
+      const serialized: SerializableActionTakenEvent = {
+        ...base,
+        type: 'ACTION_TAKEN',
+        playerId: event.playerId,
+        action: event.action,
+      };
       if (event.amount !== undefined) {
         serialized.amount = serializeChipAmount(event.amount);
       }
       if (event.allIn !== undefined) {
         serialized.allIn = event.allIn;
       }
-      break;
+      return serialized;
+    }
 
     case 'STREET_ENDED':
-      serialized.street = event.street;
-      serialized.communityCards = event.communityCards.map(cardToString);
-      serialized.potTotal = serializeChipAmount(event.potTotal);
-      break;
+      return {
+        ...base,
+        type: 'STREET_ENDED',
+        street: event.street,
+        communityCards: event.communityCards.map(cardToString),
+        potTotal: serializeChipAmount(event.potTotal),
+      };
 
     case 'SHOWDOWN':
-      serialized.players = event.players.map((p) => ({
-        playerId: p.playerId,
-        cards: p.cards
-          ? [cardToString(p.cards[0]), cardToString(p.cards[1])]
-          : undefined,
-        mucked: p.mucked,
-      }));
-      break;
+      return {
+        ...base,
+        type: 'SHOWDOWN',
+        players: event.players.map((p) => ({
+          playerId: p.playerId,
+          cards: p.cards
+            ? [cardToString(p.cards[0]), cardToString(p.cards[1])]
+            : undefined,
+          mucked: p.mucked,
+        })),
+      };
 
     case 'POT_DISTRIBUTED':
-      serialized.pots = event.pots.map((pot) => ({
-        amount: serializeChipAmount(pot.amount),
-        winners: pot.winners.map((w) => ({
-          playerId: w.playerId,
-          share: serializeChipAmount(w.share),
+      return {
+        ...base,
+        type: 'POT_DISTRIBUTED',
+        pots: event.pots.map((pot) => ({
+          amount: serializeChipAmount(pot.amount),
+          winners: pot.winners.map((w) => ({
+            playerId: w.playerId,
+            share: serializeChipAmount(w.share),
+          })),
         })),
-      }));
-      break;
+      };
 
     case 'HAND_ENDED':
-      serialized.handId = event.handId;
-      serialized.winnersByFold = event.winnersByFold;
-      serialized.finalPlayers = event.finalPlayers.map((p) => ({
-        id: p.id,
-        finalStack: serializeChipAmount(p.finalStack),
-      }));
-      break;
+      return {
+        ...base,
+        type: 'HAND_ENDED',
+        handId: event.handId,
+        winnersByFold: event.winnersByFold,
+        finalPlayers: event.finalPlayers.map((p) => ({
+          id: p.id,
+          finalStack: serializeChipAmount(p.finalStack),
+        })),
+      };
   }
-
-  return serialized;
 }
 
 /**
  * Deserialize a single event
  */
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return */
-function deserializeEvent(serialized: any): HandEvent {
+function deserializeEvent(serialized: SerializableHandEvent): HandEvent {
   const base = {
     timestamp: serialized.timestamp,
   };
@@ -279,7 +400,7 @@ function deserializeEvent(serialized: any): HandEvent {
         type: 'HAND_STARTED',
         handId: serialized.handId,
         dealerSeat: serialized.dealerSeat,
-        players: serialized.players.map((p: any) => ({
+        players: serialized.players.map((p) => ({
           id: p.id,
           seat: p.seat,
           stack: deserializeChipAmount(p.stack),
@@ -287,7 +408,17 @@ function deserializeEvent(serialized: any): HandEvent {
       };
 
     case 'BLINDS_POSTED': {
-      const event: any = { ...base, type: 'BLINDS_POSTED' };
+      const event: {
+        type: 'BLINDS_POSTED';
+        timestamp: number;
+        smallBlind?: { playerId: PlayerId; amount: ChipAmount };
+        bigBlind?: { playerId: PlayerId; amount: ChipAmount };
+        straddle?: { playerId: PlayerId; amount: ChipAmount };
+        antes?: Array<{ playerId: PlayerId; amount: ChipAmount }>;
+      } = {
+        ...base,
+        type: 'BLINDS_POSTED',
+      };
       if (serialized.smallBlind) {
         event.smallBlind = {
           playerId: serialized.smallBlind.playerId,
@@ -307,7 +438,7 @@ function deserializeEvent(serialized: any): HandEvent {
         };
       }
       if (serialized.antes) {
-        event.antes = serialized.antes.map((a: any) => ({
+        event.antes = serialized.antes.map((a) => ({
           playerId: a.playerId,
           amount: deserializeChipAmount(a.amount),
         }));
@@ -319,14 +450,21 @@ function deserializeEvent(serialized: any): HandEvent {
       return {
         ...base,
         type: 'CARDS_DEALT',
-        players: serialized.players.map((p: any) => ({
+        players: serialized.players.map((p) => ({
           playerId: p.playerId,
           cards: [parseCard(p.cards[0]), parseCard(p.cards[1])] as [Card, Card],
         })),
       };
 
     case 'ACTION_TAKEN': {
-      const event: any = {
+      const event: {
+        type: 'ACTION_TAKEN';
+        timestamp: number;
+        playerId: PlayerId;
+        action: PlayerActionType;
+        amount?: ChipAmount;
+        allIn?: boolean;
+      } = {
         ...base,
         type: 'ACTION_TAKEN',
         playerId: serialized.playerId,
@@ -354,7 +492,7 @@ function deserializeEvent(serialized: any): HandEvent {
       return {
         ...base,
         type: 'SHOWDOWN',
-        players: serialized.players.map((p: any) => ({
+        players: serialized.players.map((p) => ({
           playerId: p.playerId,
           cards: p.cards
             ? ([parseCard(p.cards[0]), parseCard(p.cards[1])] as [Card, Card])
@@ -367,9 +505,9 @@ function deserializeEvent(serialized: any): HandEvent {
       return {
         ...base,
         type: 'POT_DISTRIBUTED',
-        pots: serialized.pots.map((pot: any) => ({
+        pots: serialized.pots.map((pot) => ({
           amount: deserializeChipAmount(pot.amount),
-          winners: pot.winners.map((w: any) => ({
+          winners: pot.winners.map((w) => ({
             playerId: w.playerId,
             share: deserializeChipAmount(w.share),
           })),
@@ -382,21 +520,17 @@ function deserializeEvent(serialized: any): HandEvent {
         type: 'HAND_ENDED',
         handId: serialized.handId,
         winnersByFold: serialized.winnersByFold,
-        finalPlayers: serialized.finalPlayers.map((p: any) => ({
+        finalPlayers: serialized.finalPlayers.map((p) => ({
           id: p.id,
           finalStack: deserializeChipAmount(p.finalStack),
         })),
       };
-
-    default:
-      throw new Error(`Unknown event type: ${serialized.type}`);
   }
 }
 
 /**
  * Convert HandHistory to JSON string
  */
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 export function handHistoryToJSON(history: HandHistory): string {
   const serializable: SerializableHandHistory = {
     handId: history.handId,
@@ -413,7 +547,9 @@ export function handHistoryToJSON(history: HandHistory): string {
  * Reconstruct HandHistory from JSON string
  */
 export function handHistoryFromJSON(json: string): HandHistory {
-  const serialized: SerializableHandHistory = JSON.parse(json);
+  const serialized: SerializableHandHistory = JSON.parse(
+    json
+  ) as SerializableHandHistory;
 
   return {
     handId: serialized.handId,
@@ -423,7 +559,6 @@ export function handHistoryFromJSON(json: string): HandHistory {
     endTime: serialized.endTime,
   };
 }
-/* eslint-enable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return */
 
 /**
  * Create an empty hand history

@@ -8,6 +8,7 @@ import {
   handHistoryToJSON,
   handHistoryFromJSON,
   HandEvent,
+  HandHistory,
 } from '../../src/history/index.js';
 import {
   createDefaultTableConfig,
@@ -32,7 +33,6 @@ describe('Hand History', () => {
       expect(restored.events).toEqual([]);
     });
 
-    /* eslint-disable @typescript-eslint/no-unsafe-return */
     it('should serialize and deserialize hand with events', () => {
       const config = createDefaultTableConfig();
       const history = createHandHistory(5, config);
@@ -124,7 +124,7 @@ describe('Hand History', () => {
       const json = handHistoryToJSON(history);
 
       // Verify JSON is valid
-      expect(() => JSON.parse(json)).not.toThrow();
+      expect(() => JSON.parse(json) as HandHistory).not.toThrow();
 
       // Deserialize back
       const restored = handHistoryFromJSON(json);
@@ -190,7 +190,6 @@ describe('Hand History', () => {
         expect(restoredHandEnded.finalPlayers[0].finalStack).toBe(1050n);
       }
     });
-    /* eslint-enable @typescript-eslint/no-unsafe-return */
 
     it('should handle table config with ante and straddle', () => {
       const config = createDefaultTableConfig();
