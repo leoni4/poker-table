@@ -294,4 +294,181 @@ describe('Hand History', () => {
       expect(json2).toBe(json);
     });
   });
+
+  describe('Additional event types', () => {
+    it('should serialize and deserialize showdown event', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+
+      history.events.push({
+        type: 'SHOWDOWN',
+        timestamp: Date.now(),
+        players: [
+          {
+            playerId: player1,
+            cards: [
+              createCard(Rank.Ace, Suit.Spades),
+              createCard(Rank.King, Suit.Spades),
+            ],
+          },
+          {
+            playerId: player2,
+            mucked: true,
+          },
+        ],
+      });
+
+      const json = handHistoryToJSON(history);
+      const restored = handHistoryFromJSON(json);
+
+      expect(restored.events).toHaveLength(1);
+      const showdown = restored.events[0];
+      expect(showdown.type).toBe('SHOWDOWN');
+      if (showdown.type === 'SHOWDOWN') {
+        expect(showdown.players).toHaveLength(2);
+        expect(showdown.players[0].cards).toBeDefined();
+        expect(showdown.players[0].cards).toHaveLength(2);
+        expect(showdown.players[1].mucked).toBe(true);
+        expect(showdown.players[1].cards).toBeUndefined();
+      }
+    });
+
+    it('should serialize and deserialize action without amount or allIn', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+
+      history.events.push({
+        type: 'ACTION_TAKEN',
+        timestamp: Date.now(),
+        playerId: player1,
+        action: 'FOLD',
+      });
+
+      const json = handHistoryToJSON(history);
+      const restored = handHistoryFromJSON(json);
+
+      expect(restored.events).toHaveLength(1);
+      const action = restored.events[0];
+      expect(action.type).toBe('ACTION_TAKEN');
+      if (action.type === 'ACTION_TAKEN') {
+        expect(action.playerId).toBe(player1);
+        expect(action.action).toBe('FOLD');
+        expect(action.amount).toBeUndefined();
+        expect(action.allIn).toBeUndefined();
+      }
+    });
+
+    it('should serialize and deserialize blinds event with only smallBlind', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player1, amount: chips(1) },
+      });
+
+      const json = handHistoryToJSON(history);
+      const restored = handHistoryFromJSON(json);
+
+      expect(restored.events).toHaveLength(1);
+      const blinds = restored.events[0];
+      expect(blinds.type).toBe('BLINDS_POSTED');
+      if (blinds.type === 'BLINDS_POSTED') {
+        expect(blinds.smallBlind?.amount).toBe(1n);
+        expect(blinds.bigBlind).toBeUndefined();
+        expect(blinds.straddle).toBeUndefined();
+        expect(blinds.antes).toBeUndefined();
+      }
+    });
+
+    it('should serialize and deserialize hand ended event with winnersByFold', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(5, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+
+      history.events.push({
+        type: 'HAND_ENDED',
+        timestamp: Date.now(),
+        handId: 5,
+        winnersByFold: true,
+        finalPlayers: [
+          { id: player1, finalStack: chips(1100) },
+          { id: player2, finalStack: chips(900) },
+        ],
+      });
+
+      const json = handHistoryToJSON(history);
+      const restored = handHistoryFromJSON(json);
+
+      expect(restored.events).toHaveLength(1);
+      const handEnded = restored.events[0];
+      expect(handEnded.type).toBe('HAND_ENDED');
+      if (handEnded.type === 'HAND_ENDED') {
+        expect(handEnded.handId).toBe(5);
+        expect(handEnded.winnersByFold).toBe(true);
+        expect(handEnded.finalPlayers).toHaveLength(2);
+      }
+    });
+
+    it('should handle showdown with mucked cards and no cards', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+      const player3 = createPlayerId('charlie');
+
+      history.events.push({
+        type: 'SHOWDOWN',
+        timestamp: Date.now(),
+        players: [
+          {
+            playerId: player1,
+            cards: [
+              createCard(Rank.Ace, Suit.Hearts),
+              createCard(Rank.King, Suit.Hearts),
+            ],
+          },
+          {
+            playerId: player2,
+            mucked: true,
+          },
+          {
+            playerId: player3,
+            cards: [
+              createCard(Rank.Queen, Suit.Diamonds),
+              createCard(Rank.Jack, Suit.Diamonds),
+            ],
+            mucked: false,
+          },
+        ],
+      });
+
+      const json = handHistoryToJSON(history);
+      const restored = handHistoryFromJSON(json);
+
+      expect(restored.events).toHaveLength(1);
+      const showdown = restored.events[0];
+      expect(showdown.type).toBe('SHOWDOWN');
+      if (showdown.type === 'SHOWDOWN') {
+        expect(showdown.players).toHaveLength(3);
+        expect(showdown.players[0].cards).toBeDefined();
+        expect(showdown.players[0].mucked).toBeUndefined();
+        expect(showdown.players[1].cards).toBeUndefined();
+        expect(showdown.players[1].mucked).toBe(true);
+        expect(showdown.players[2].cards).toBeDefined();
+        expect(showdown.players[2].mucked).toBe(false);
+      }
+    });
+  });
 });

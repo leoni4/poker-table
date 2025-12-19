@@ -530,4 +530,752 @@ describe('Hand Replay', () => {
       }
     });
   });
+
+  describe('Edge cases and additional coverage', () => {
+    it('should handle bet action with amount', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(1000) },
+          { id: player2, seat: 1, stack: chips(1000) },
+        ],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player1, amount: chips(1) },
+        bigBlind: { playerId: player2, amount: chips(2) },
+      });
+
+      // Player 1 bets
+      history.events.push({
+        type: 'ACTION_TAKEN',
+        timestamp: Date.now(),
+        playerId: player1,
+        action: 'BET',
+        amount: chips(10),
+      });
+
+      const states = replayHand(history, config);
+
+      const afterBet = states[2];
+      expect(afterBet.players[0].committed).toBe(11n); // 1 (SB) + 10 (bet)
+      expect(afterBet.players[0].stack).toBe(989n);
+    });
+
+    it('should handle raise action with amount', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(1000) },
+          { id: player2, seat: 1, stack: chips(1000) },
+        ],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player1, amount: chips(1) },
+        bigBlind: { playerId: player2, amount: chips(2) },
+      });
+
+      // Player 1 raises
+      history.events.push({
+        type: 'ACTION_TAKEN',
+        timestamp: Date.now(),
+        playerId: player1,
+        action: 'RAISE',
+        amount: chips(6),
+      });
+
+      const states = replayHand(history, config);
+
+      const afterRaise = states[2];
+      expect(afterRaise.players[0].committed).toBe(7n); // 1 (SB) + 6 (raise)
+      expect(afterRaise.players[0].stack).toBe(993n);
+    });
+
+    it('should handle all-in action', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(100) },
+          { id: player2, seat: 1, stack: chips(1000) },
+        ],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player1, amount: chips(1) },
+        bigBlind: { playerId: player2, amount: chips(2) },
+      });
+
+      // Player 1 goes all-in
+      history.events.push({
+        type: 'ACTION_TAKEN',
+        timestamp: Date.now(),
+        playerId: player1,
+        action: 'ALL_IN',
+      });
+
+      const states = replayHand(history, config);
+
+      const afterAllIn = states[2];
+      expect(afterAllIn.players[0].stack).toBe(0n);
+      expect(afterAllIn.players[0].status).toBe(PlayerStatus.AllIn);
+      expect(afterAllIn.players[0].committed).toBe(100n);
+    });
+
+    it('should handle raise with allIn flag', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(100) },
+          { id: player2, seat: 1, stack: chips(1000) },
+        ],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player1, amount: chips(1) },
+        bigBlind: { playerId: player2, amount: chips(2) },
+      });
+
+      // Player 1 raises all-in
+      history.events.push({
+        type: 'ACTION_TAKEN',
+        timestamp: Date.now(),
+        playerId: player1,
+        action: 'RAISE',
+        amount: chips(99),
+        allIn: true,
+      });
+
+      const states = replayHand(history, config);
+
+      const afterRaise = states[2];
+      expect(afterRaise.players[0].stack).toBe(0n);
+      expect(afterRaise.players[0].status).toBe(PlayerStatus.AllIn);
+    });
+
+    it('should handle antes in blinds posted event', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(1000) },
+          { id: player2, seat: 1, stack: chips(1000) },
+        ],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        antes: [
+          { playerId: player1, amount: chips(5) },
+          { playerId: player2, amount: chips(5) },
+        ],
+        smallBlind: { playerId: player1, amount: chips(1) },
+        bigBlind: { playerId: player2, amount: chips(2) },
+      });
+
+      const states = replayHand(history, config);
+
+      const afterBlinds = states[1];
+      expect(afterBlinds.players[0].committed).toBe(6n); // 5 (ante) + 1 (SB)
+      expect(afterBlinds.players[1].committed).toBe(7n); // 5 (ante) + 2 (BB)
+      expect(afterBlinds.pots[0].total).toBe(13n);
+    });
+
+    it('should handle straddle in blinds posted event', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+      const player3 = createPlayerId('charlie');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(1000) },
+          { id: player2, seat: 1, stack: chips(1000) },
+          { id: player3, seat: 2, stack: chips(1000) },
+        ],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player1, amount: chips(1) },
+        bigBlind: { playerId: player2, amount: chips(2) },
+        straddle: { playerId: player3, amount: chips(4) },
+      });
+
+      const states = replayHand(history, config);
+
+      const afterBlinds = states[1];
+      expect(afterBlinds.players[0].committed).toBe(1n);
+      expect(afterBlinds.players[1].committed).toBe(2n);
+      expect(afterBlinds.players[2].committed).toBe(4n);
+      expect(afterBlinds.pots[0].total).toBe(7n);
+    });
+
+    it('should handle player going all-in when posting blinds', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(1) },
+          { id: player2, seat: 1, stack: chips(1000) },
+        ],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player1, amount: chips(1) },
+        bigBlind: { playerId: player2, amount: chips(2) },
+      });
+
+      const states = replayHand(history, config);
+
+      const afterBlinds = states[1];
+      expect(afterBlinds.players[0].stack).toBe(0n);
+      expect(afterBlinds.players[0].status).toBe(PlayerStatus.AllIn);
+    });
+
+    it('should handle call when player does not have enough chips', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(5) },
+          { id: player2, seat: 1, stack: chips(1000) },
+        ],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player1, amount: chips(1) },
+        bigBlind: { playerId: player2, amount: chips(2) },
+      });
+
+      // Player 2 raises to 10
+      history.events.push({
+        type: 'ACTION_TAKEN',
+        timestamp: Date.now(),
+        playerId: player2,
+        action: 'RAISE',
+        amount: chips(8),
+      });
+
+      // Player 1 calls with remaining chips
+      history.events.push({
+        type: 'ACTION_TAKEN',
+        timestamp: Date.now(),
+        playerId: player1,
+        action: 'CALL',
+      });
+
+      const states = replayHand(history, config);
+
+      const afterCall = states[3];
+      expect(afterCall.players[0].stack).toBe(0n);
+      expect(afterCall.players[0].status).toBe(PlayerStatus.AllIn);
+      expect(afterCall.players[0].committed).toBe(5n);
+    });
+
+    it('should handle bet/raise when player does not have enough chips', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(50) },
+          { id: player2, seat: 1, stack: chips(1000) },
+        ],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player1, amount: chips(1) },
+        bigBlind: { playerId: player2, amount: chips(2) },
+      });
+
+      // Player 1 tries to raise to 100 but only has 49 left
+      history.events.push({
+        type: 'ACTION_TAKEN',
+        timestamp: Date.now(),
+        playerId: player1,
+        action: 'RAISE',
+        amount: chips(100),
+      });
+
+      const states = replayHand(history, config);
+
+      const afterRaise = states[2];
+      expect(afterRaise.players[0].stack).toBe(0n);
+      expect(afterRaise.players[0].committed).toBe(50n);
+    });
+
+    it('should handle unknown event type gracefully', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [{ id: player1, seat: 0, stack: chips(1000) }],
+      });
+
+      // Add an unknown event type
+
+      history.events.push({
+        type: 'UNKNOWN_EVENT',
+        timestamp: Date.now(),
+      } as unknown as (typeof history.events)[number]);
+
+      // Should not throw
+      const states = replayHand(history, config);
+      expect(states).toHaveLength(2);
+    });
+
+    it('should handle action on non-existent player', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+      const nonExistentPlayer = createPlayerId('ghost');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(1000) },
+          { id: player2, seat: 1, stack: chips(1000) },
+        ],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player1, amount: chips(1) },
+        bigBlind: { playerId: player2, amount: chips(2) },
+      });
+
+      // Action by non-existent player
+      history.events.push({
+        type: 'ACTION_TAKEN',
+        timestamp: Date.now(),
+        playerId: nonExistentPlayer,
+        action: 'FOLD',
+      });
+
+      const states = replayHand(history, config);
+
+      // State should remain unchanged
+      expect(states[2].players).toHaveLength(2);
+      expect(states[2].players[0].status).toBe(PlayerStatus.Active);
+    });
+
+    it('should handle multi-player scenarios', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+      const player3 = createPlayerId('charlie');
+      const player4 = createPlayerId('dave');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(1000) },
+          { id: player2, seat: 1, stack: chips(1000) },
+          { id: player3, seat: 2, stack: chips(1000) },
+          { id: player4, seat: 3, stack: chips(1000) },
+        ],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player2, amount: chips(1) },
+        bigBlind: { playerId: player3, amount: chips(2) },
+      });
+
+      const states = replayHand(history, config);
+
+      const afterBlinds = states[1];
+      expect(afterBlinds.players).toHaveLength(4);
+      expect(afterBlinds.pots[0].total).toBe(3n);
+    });
+
+    it('should handle split pot distribution', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(1000) },
+          { id: player2, seat: 1, stack: chips(1000) },
+        ],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player1, amount: chips(1) },
+        bigBlind: { playerId: player2, amount: chips(2) },
+      });
+
+      // Split pot (tie)
+      history.events.push({
+        type: 'POT_DISTRIBUTED',
+        timestamp: Date.now(),
+        pots: [
+          {
+            amount: chips(100),
+            winners: [
+              { playerId: player1, share: chips(50) },
+              { playerId: player2, share: chips(50) },
+            ],
+          },
+        ],
+      });
+
+      const states = replayHand(history, config);
+
+      const afterDistribution = states[2];
+      expect(afterDistribution.players[0].stack).toBe(1049n); // 999 + 50
+      expect(afterDistribution.players[1].stack).toBe(1048n); // 998 + 50
+    });
+
+    it('should handle multiple pots distribution', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+      const player3 = createPlayerId('charlie');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(1000) },
+          { id: player2, seat: 1, stack: chips(1000) },
+          { id: player3, seat: 2, stack: chips(1000) },
+        ],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player1, amount: chips(1) },
+        bigBlind: { playerId: player2, amount: chips(2) },
+      });
+
+      // Multiple pots (main pot + side pot)
+      history.events.push({
+        type: 'POT_DISTRIBUTED',
+        timestamp: Date.now(),
+        pots: [
+          {
+            amount: chips(60),
+            winners: [{ playerId: player1, share: chips(60) }],
+          },
+          {
+            amount: chips(40),
+            winners: [{ playerId: player2, share: chips(40) }],
+          },
+        ],
+      });
+
+      const states = replayHand(history, config);
+
+      const afterDistribution = states[2];
+      expect(afterDistribution.players[0].stack).toBe(1059n); // 999 + 60
+      expect(afterDistribution.players[1].stack).toBe(1038n); // 998 + 40
+    });
+
+    it('should handle blinds posted without pots when no committed amounts', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [{ id: player1, seat: 0, stack: chips(1000) }],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+      });
+
+      const states = replayHand(history, config);
+
+      const afterBlinds = states[1];
+      expect(afterBlinds.pots).toHaveLength(0);
+    });
+
+    it('should handle street ended without existing pots', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(1000) },
+          { id: player2, seat: 1, stack: chips(1000) },
+        ],
+      });
+
+      // Skip blinds, go straight to street ended
+      history.events.push({
+        type: 'STREET_ENDED',
+        timestamp: Date.now(),
+        street: TablePhase.Flop,
+        communityCards: [
+          createCard(Rank.Ace, Suit.Hearts),
+          createCard(Rank.King, Suit.Diamonds),
+          createCard(Rank.Queen, Suit.Clubs),
+        ],
+        potTotal: chips(50),
+      });
+
+      const states = replayHand(history, config);
+
+      const afterStreet = states[1];
+      expect(afterStreet.pots).toHaveLength(1);
+      expect(afterStreet.pots[0].total).toBe(50n);
+      expect(afterStreet.pots[0].participants).toHaveLength(0);
+    });
+
+    it('should handle hand started without dealerSeat being set', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [{ id: player1, seat: 0, stack: chips(1000) }],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player1, amount: chips(1) },
+      });
+
+      const states = replayHand(history, config);
+
+      // Should handle single player scenario
+      expect(states).toHaveLength(2);
+      expect(states[1].currentPlayerId).toBeDefined();
+    });
+
+    it('should handle street ended with undefined dealerSeat', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(1000) },
+          { id: player2, seat: 1, stack: chips(1000) },
+        ],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player1, amount: chips(1) },
+        bigBlind: { playerId: player2, amount: chips(2) },
+      });
+
+      // Manually modify the state's dealerSeat to undefined via a custom state
+      // by using street ended which will call findFirstPlayerAfterDealer
+      history.events.push({
+        type: 'STREET_ENDED',
+        timestamp: Date.now(),
+        street: TablePhase.Flop,
+        communityCards: [
+          createCard(Rank.Ace, Suit.Hearts),
+          createCard(Rank.King, Suit.Diamonds),
+          createCard(Rank.Queen, Suit.Clubs),
+        ],
+        potTotal: chips(3),
+      });
+
+      const states = replayHand(history, config);
+
+      const afterFlop = states[2];
+      expect(afterFlop.currentPlayerId).toBeDefined();
+    });
+
+    it('should handle action when no active players remain', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(100) },
+          { id: player2, seat: 1, stack: chips(100) },
+        ],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player1, amount: chips(1) },
+        bigBlind: { playerId: player2, amount: chips(2) },
+      });
+
+      // Both players fold
+      history.events.push({
+        type: 'ACTION_TAKEN',
+        timestamp: Date.now(),
+        playerId: player1,
+        action: 'FOLD',
+      });
+
+      history.events.push({
+        type: 'ACTION_TAKEN',
+        timestamp: Date.now(),
+        playerId: player2,
+        action: 'FOLD',
+      });
+
+      const states = replayHand(history, config);
+
+      // Should handle no active players gracefully
+      expect(states).toHaveLength(4);
+      expect(states[3].players[0].status).toBe(PlayerStatus.Folded);
+      expect(states[3].players[1].status).toBe(PlayerStatus.Folded);
+    });
+  });
 });
