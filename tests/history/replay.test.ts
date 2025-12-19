@@ -909,11 +909,11 @@ describe('Hand Replay', () => {
       });
 
       // Add an unknown event type
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+
       history.events.push({
         type: 'UNKNOWN_EVENT',
         timestamp: Date.now(),
-      } as any);
+      } as unknown as (typeof history.events)[number]);
 
       // Should not throw
       const states = replayHand(history, config);
