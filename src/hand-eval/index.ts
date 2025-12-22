@@ -3,6 +3,6 @@
  * Provides functions to evaluate hands, compare them, and determine winners
  */
 
-export * from './types';
-export * from './evaluator';
-export * from './comparison';
+export * from './types.js';
+export * from './evaluator.js';
+export * from './comparison.js';

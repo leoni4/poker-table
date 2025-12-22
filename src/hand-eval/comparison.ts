@@ -2,14 +2,14 @@
  * Hand comparison and winner determination logic
  */
 
-import { Card } from '../core/card';
+import { Card } from '../core/card.js';
 import {
   EvaluatedHand,
   ComparisonResult,
   PlayerHand,
   WinnerResult,
-} from './types';
-import { evaluateHand } from './evaluator';
+} from './types.js';
+import { evaluateHand } from './evaluator.js';
 
 /**
  * Compares two evaluated hands

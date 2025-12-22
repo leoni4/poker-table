@@ -2,7 +2,7 @@
  * Hand evaluation types for Texas Hold'em
  */
 
-import { Card } from '../core/card';
+import { Card } from '../core/card.js';
 
 /**
  * Hand categories in ascending order of strength

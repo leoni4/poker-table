@@ -1,6 +1,6 @@
 {
   "name": "@leoni4/poker-table",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "High-performance single-table No-Limit Texas Hold'em poker engine for Node.js",
   "type": "module",
   "main": "./dist/index.js",
@@ -21,8 +21,10 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:esm": "node tests/esm-smoke-test.mjs",
     "lint": "eslint src tests --ext .ts",
     "typecheck": "tsc --noEmit",
+    "prepack": "npm run lint && npm run typecheck && npm run test && npm run build && npm run test:esm",
     "prepare": "npm run build"
   },
   "repository": {

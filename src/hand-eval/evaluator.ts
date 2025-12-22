@@ -2,8 +2,8 @@
  * Hand evaluation logic for Texas Hold'em
  */
 
-import { Card, getCardRank, getCardSuit } from '../core/card';
-import { HandCategory, EvaluatedHand } from './types';
+import { Card, getCardRank, getCardSuit } from '../core/card.js';
+import { HandCategory, EvaluatedHand } from './types.js';
 
 /**
  * Evaluates a poker hand from up to 7 cards (hole cards + board)
