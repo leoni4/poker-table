@@ -506,11 +506,24 @@ describe('HoldemTable - Public API Integration Tests', () => {
       ) {
         if (!currentState.currentPlayerId) break;
 
+        const currentPlayer = currentState.players.find(
+          (player) => player.id === currentState.currentPlayerId
+        );
+        if (!currentPlayer) break;
+
+        const currentBet = currentState.players.reduce(
+          (max, player) =>
+            player.committed > max ? player.committed : max,
+          0n
+        );
+        const action =
+          currentBet > currentPlayer.committed
+            ? ({ type: 'CALL' } as const)
+            : ({ type: 'CHECK' } as const);
+
         const actionResult = gameTable.applyAction(
           currentState.currentPlayerId,
-          {
-            type: 'CALL',
-          }
+          action
         );
 
         expect(isOk(actionResult)).toBe(true);

@@ -125,7 +125,8 @@ export interface PlayerState {
   stack: ChipAmount;
 
   /**
-   * Amount committed to the pot in current hand
+   * Amount committed on the current betting street.
+   * Reset to zero when the hand advances to a new street.
    */
   committed: ChipAmount;
 
@@ -174,6 +175,33 @@ export enum TablePhase {
 }
 
 /**
+ * Explicit state for the current betting street.
+ *
+ * `actedPlayerIds` contains players who have acted since the latest full
+ * aggressive action (bet / full raise). This lets the engine distinguish
+ * "bets are matched" from "everyone who still needs a turn has acted".
+ */
+export interface BettingRoundState {
+  /** Street this state belongs to. */
+  street: TablePhase;
+
+  /** Highest amount committed by a player on this street. */
+  currentBet: ChipAmount;
+
+  /**
+   * Size of the latest full bet/raise increment.
+   * Used to validate the minimum size of a subsequent RAISE.
+   */
+  lastRaiseSize: ChipAmount;
+
+  /** Player who made the latest full aggressive action, if any. */
+  lastAggressorId?: PlayerId;
+
+  /** Players who have acted since the latest full aggressive action. */
+  actedPlayerIds: PlayerId[];
+}
+
+/**
  * Complete table state
  */
 export interface TableState {
@@ -215,6 +243,15 @@ export interface TableState {
    * undefined if no action is pending
    */
   currentPlayerId?: PlayerId;
+
+  /**
+   * Explicit state for the current betting street.
+   *
+   * Optional for backwards compatibility with callers that construct
+   * `TableState` snapshots manually. The table engine always initializes it
+   * for live hands.
+   */
+  bettingRound?: BettingRoundState;
 }
 
 /**

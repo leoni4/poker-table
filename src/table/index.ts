@@ -20,8 +20,17 @@ import {
   PlayerAction,
   applyActionToBettingRound,
   isBettingRoundComplete,
+  startBettingRound,
 } from '../betting/index.js';
 import { HandHistory } from '../history/index.js';
+import {
+  PlayerContribution,
+  Payout,
+  constructPots,
+  distributePot,
+  applyPayouts,
+} from '../pot/index.js';
+import { determineWinners } from '../hand-eval/index.js';
 
 /**
  * Table error type for seat management operations
@@ -58,6 +67,7 @@ export class Table {
   private deck: Deck | null = null;
   private currentHandHistory: HandHistory | null = null;
   private lastHandHistory: HandHistory | null = null;
+  private handContributions = new Map<PlayerId, ChipAmount>();
 
   constructor(config: TableConfig, rebuyOptions: RebuyOptions = {}) {
     this.config = config;
@@ -91,6 +101,12 @@ export class Table {
         ...pot,
         participants: [...pot.participants],
       })),
+      bettingRound: this.state.bettingRound
+        ? {
+            ...this.state.bettingRound,
+            actedPlayerIds: [...this.state.bettingRound.actedPlayerIds],
+          }
+        : undefined,
     };
   }
 
@@ -396,8 +412,9 @@ export class Table {
       player.holeCards = {};
     }
 
-    // Clear pots
+    // Clear pots and betting-round state
     this.state.pots = [];
+    this.state.bettingRound = undefined;
 
     // Post antes if configured
     if (this.config.ante) {
@@ -412,21 +429,15 @@ export class Table {
       this.postStraddle();
     }
 
-    // Create initial pot
-    const totalCommitted = this.state.players.reduce(
-      (sum, p) => sum + p.committed,
-      0n
-    );
-    if (totalCommitted > 0n) {
-      this.state.pots = [
-        {
-          total: totalCommitted,
-          participants: this.state.players
-            .filter((p) => p.committed > 0n)
-            .map((p) => p.id),
-        },
-      ];
+    // Track total hand contributions separately from per-street `committed`
+    // amounts so pots remain correct when commitments reset on a new street.
+    this.handContributions.clear();
+    for (const player of this.state.players) {
+      if (player.committed > 0n) {
+        this.handContributions.set(player.id, player.committed);
+      }
     }
+    this.refreshPots();
 
     // Set phase to preflop
     this.state.phase = TablePhase.Preflop;
@@ -436,6 +447,17 @@ export class Table {
 
     // Set first player to act (after BB or straddle)
     this.setFirstToAct();
+
+    if (this.state.currentPlayerId) {
+      const roundResult = startBettingRound(
+        this.state,
+        this.state.currentPlayerId
+      );
+      if (!roundResult.ok) {
+        return roundResult;
+      }
+      this.state = roundResult.value;
+    }
 
     return ok(this.getState());
   }
@@ -662,6 +684,9 @@ export class Table {
     playerId: PlayerId,
     action: PlayerAction
   ): Result<TableState, TableError> {
+    const previousPlayer = this.state.players.find((p) => p.id === playerId);
+    const previousCommitted = previousPlayer?.committed ?? 0n;
+
     // Apply action to betting round
     const actionResult = applyActionToBettingRound(
       this.state,
@@ -674,19 +699,51 @@ export class Table {
 
     this.state = actionResult.value;
 
+    const updatedPlayer = this.state.players.find((p) => p.id === playerId);
+    if (updatedPlayer) {
+      const contributionDelta = updatedPlayer.committed - previousCommitted;
+      if (contributionDelta > 0n) {
+        this.handContributions.set(
+          playerId,
+          (this.handContributions.get(playerId) ?? 0n) + contributionDelta
+        );
+      }
+    }
+    this.refreshPots();
+
     // Check if betting round is complete
     if (isBettingRoundComplete(this.state)) {
-      // Check if only one player remains (all others folded)
-      const activePlayers = this.state.players.filter(
+      const playersInHand = this.state.players.filter(
         (p) =>
           p.status === PlayerStatus.Active || p.status === PlayerStatus.AllIn
       );
 
-      if (activePlayers.length <= 1) {
-        // Hand is over, transition to showdown/completion
+      if (playersInHand.length <= 1) {
+        // Hand is over because everyone else folded.
         this.state.phase = TablePhase.Showdown;
         this.state.currentPlayerId = undefined;
+        this.state.bettingRound = undefined;
+
+        const soleWinner = playersInHand[0];
+        if (soleWinner) {
+          const settlementResult = this.settleSoleWinner(soleWinner.id);
+          if (!settlementResult.ok) {
+            return settlementResult;
+          }
+        }
+
         return ok(this.getState());
+      }
+
+      const playersWhoCanAct = playersInHand.filter(
+        (p) => p.status === PlayerStatus.Active && p.stack > 0n
+      );
+
+      if (playersWhoCanAct.length <= 1) {
+        // No further betting is possible (everyone else is all-in). Run the
+        // remaining board automatically instead of leaving the hand stuck
+        // without a current player.
+        return this.runoutToShowdown();
       }
 
       // Advance to next street
@@ -754,6 +811,13 @@ export class Table {
         // Go to showdown
         this.state.phase = TablePhase.Showdown;
         this.state.currentPlayerId = undefined;
+        this.state.bettingRound = undefined;
+
+        const settlementResult = this.settleShowdown();
+        if (!settlementResult.ok) {
+          return settlementResult;
+        }
+
         return ok(this.getState());
       }
 
@@ -769,7 +833,215 @@ export class Table {
     // Set first to act for new betting round (after dealer)
     this.setFirstToActPostFlop();
 
+    if (this.state.currentPlayerId) {
+      const roundResult = startBettingRound(
+        this.state,
+        this.state.currentPlayerId
+      );
+      if (!roundResult.ok) {
+        return roundResult;
+      }
+      this.state = roundResult.value;
+    }
+
     return ok(this.getState());
+  }
+
+  /**
+   * Deal every remaining community card when no further betting is possible.
+   */
+  private runoutToShowdown(): Result<TableState, TableError> {
+    if (!this.deck) {
+      return err(createError(ErrorCode.INVALID_STATE, 'No deck available'));
+    }
+
+    for (const player of this.state.players) {
+      player.committed = 0n;
+    }
+
+    if (this.state.phase === TablePhase.Preflop) {
+      const flopResult = this.deck.dealFlop();
+      if (!flopResult.ok) {
+        return err(
+          createError(ErrorCode.INVALID_STATE, 'Failed to deal flop')
+        );
+      }
+      this.state.communityCards = [...flopResult.value];
+      this.state.phase = TablePhase.Flop;
+    }
+
+    if (this.state.phase === TablePhase.Flop) {
+      const turnResult = this.deck.dealCommunityCard();
+      if (!turnResult.ok) {
+        return err(
+          createError(ErrorCode.INVALID_STATE, 'Failed to deal turn')
+        );
+      }
+      this.state.communityCards.push(turnResult.value);
+      this.state.phase = TablePhase.Turn;
+    }
+
+    if (this.state.phase === TablePhase.Turn) {
+      const riverResult = this.deck.dealCommunityCard();
+      if (!riverResult.ok) {
+        return err(
+          createError(ErrorCode.INVALID_STATE, 'Failed to deal river')
+        );
+      }
+      this.state.communityCards.push(riverResult.value);
+      this.state.phase = TablePhase.River;
+    }
+
+    this.state.phase = TablePhase.Showdown;
+    this.state.currentPlayerId = undefined;
+    this.state.bettingRound = undefined;
+
+    const settlementResult = this.settleShowdown();
+    if (!settlementResult.ok) {
+      return settlementResult;
+    }
+
+    return ok(this.getState());
+  }
+
+  /**
+   * Rebuild visible pots from cumulative hand contributions.
+   */
+  private refreshPots(): void {
+    const contributions: PlayerContribution[] = [];
+
+    for (const [playerId, amount] of this.handContributions) {
+      if (amount <= 0n) {
+        continue;
+      }
+
+      const player = this.state.players.find((p) => p.id === playerId);
+      contributions.push({
+        playerId,
+        amount,
+        isAllIn: player?.status === PlayerStatus.AllIn,
+      });
+    }
+
+    const eligiblePlayers = new Set(
+      this.state.players
+        .filter(
+          (p) =>
+            p.status === PlayerStatus.Active || p.status === PlayerStatus.AllIn
+        )
+        .map((p) => p.id)
+    );
+
+    const hasAllInContribution = contributions.some(
+      (contribution) => contribution.isAllIn
+    );
+
+    if (!hasAllInContribution) {
+      const total = contributions.reduce(
+        (sum, contribution) => sum + contribution.amount,
+        0n
+      );
+
+      this.state.pots =
+        total > 0n
+          ? [
+              {
+                total,
+                participants: contributions
+                  .map((contribution) => contribution.playerId)
+                  .filter((id) => eligiblePlayers.has(id)),
+              },
+            ]
+          : [];
+      return;
+    }
+
+    this.state.pots = constructPots(contributions).map((pot) => ({
+      ...pot,
+      participants: pot.participants.filter((id) => eligiblePlayers.has(id)),
+    }));
+  }
+
+  /**
+   * Pay every pot to the only player left in the hand.
+   */
+  private settleSoleWinner(
+    winnerId: PlayerId
+  ): Result<void, TableError> {
+    this.refreshPots();
+
+    const payouts = this.state.pots.map((pot, potIndex) => ({
+      playerId: winnerId,
+      amount: pot.total,
+      potIndex,
+    }));
+
+    const payoutResult = applyPayouts(this.state.players, payouts);
+    if (!payoutResult.ok) {
+      return payoutResult;
+    }
+
+    return ok(undefined);
+  }
+
+  /**
+   * Evaluate and distribute every pot at showdown.
+   */
+  private settleShowdown(): Result<void, TableError> {
+    this.refreshPots();
+
+    const allPayouts: Payout[] = [];
+
+    for (let potIndex = 0; potIndex < this.state.pots.length; potIndex++) {
+      const pot = this.state.pots[potIndex];
+      const eligiblePlayers = this.state.players.filter(
+        (player) =>
+          pot.participants.includes(player.id) &&
+          (player.status === PlayerStatus.Active ||
+            player.status === PlayerStatus.AllIn) &&
+          player.holeCards.cards !== undefined
+      );
+
+      if (eligiblePlayers.length === 0) {
+        continue;
+      }
+
+      let winnerIds: PlayerId[];
+
+      if (eligiblePlayers.length === 1) {
+        winnerIds = [eligiblePlayers[0].id];
+      } else {
+        const result = determineWinners(
+          eligiblePlayers.map((player) => ({
+            playerId: player.id,
+            holeCards: player.holeCards.cards!,
+          })),
+          this.state.communityCards
+        );
+
+        winnerIds = result.winners
+          .map((winnerId) =>
+            eligiblePlayers.find((player) => player.id === winnerId)
+          )
+          .filter((player): player is PlayerState => player !== undefined)
+          .map((player) => player.id);
+      }
+
+      const distribution = distributePot(
+        pot,
+        winnerIds,
+        potIndex,
+        this.config.rake
+      );
+      allPayouts.push(...distribution.payouts);
+    }
+
+    const payoutResult = applyPayouts(this.state.players, allPayouts);
+    if (!payoutResult.ok) {
+      return payoutResult;
+    }
+
+    return ok(undefined);
   }
 
   /**
