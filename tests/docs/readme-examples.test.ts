@@ -13,6 +13,7 @@ import {
   isOk,
   PlayerAction,
   TableConfig,
+  getAvailableActions,
 } from '../../src/index.js';
 
 describe('README Examples Validation', () => {
@@ -53,24 +54,13 @@ describe('README Examples Validation', () => {
           break;
         }
 
-        // Decide on an action
-        const player = state.players.find(
-          (p) => p.id === state.currentPlayerId
-        );
-        if (!player) break;
-
-        const amountToCall = state.players.reduce(
-          (max, p) => (p.committed > max ? p.committed : max),
-          0n
-        );
-        const needsToCall = amountToCall - player.committed;
-
-        let action;
-        if (needsToCall > 0n) {
-          action = { type: 'CALL' as const };
-        } else {
-          action = { type: 'CHECK' as const };
-        }
+        // Decide only among actions declared legal by the engine.
+        const legal = getAvailableActions(state, state.currentPlayerId);
+        const action = legal.includes('CHECK')
+          ? { type: 'CHECK' as const }
+          : legal.includes('CALL')
+            ? { type: 'CALL' as const }
+            : { type: 'FOLD' as const };
 
         // Apply the action
         const actionResult = table.applyAction(state.currentPlayerId, action);
@@ -330,22 +320,13 @@ describe('README Examples Validation', () => {
           break;
         }
 
-        // Simple decision logic: call or check
-        const player = state.players.find(
-          (p) => p.id === state.currentPlayerId
-        );
-        if (!player) break;
-
-        const currentBet = state.players.reduce(
-          (max, p) => (p.committed > max ? p.committed : max),
-          0n
-        );
-        const needsToCall = currentBet - player.committed;
-
-        const action =
-          needsToCall > 0n
+        // Simple decision logic: use engine-declared legal actions.
+        const legal = getAvailableActions(state, state.currentPlayerId);
+        const action = legal.includes('CHECK')
+          ? { type: 'CHECK' as const }
+          : legal.includes('CALL')
             ? { type: 'CALL' as const }
-            : { type: 'CHECK' as const };
+            : { type: 'FOLD' as const };
 
         const result = table.applyAction(state.currentPlayerId, action);
         expect(isOk(result)).toBe(true);
@@ -410,10 +391,13 @@ describe('README Examples Validation', () => {
       expect(isOk(startResult)).toBe(true);
       if (!isOk(startResult)) return;
 
-      // API can be called during hand (implementation may return null)
       const currentHistory = table.getCurrentHandHistory();
-      void currentHistory; // API demonstration
-      // Note: Hand history tracking may be implemented in future versions
+      expect(currentHistory).not.toBeNull();
+      expect(currentHistory?.events.map((event) => event.type)).toEqual([
+        'HAND_STARTED',
+        'BLINDS_POSTED',
+        'CARDS_DEALT',
+      ]);
 
       // Complete the hand
       let state = startResult.value;
@@ -442,8 +426,10 @@ describe('README Examples Validation', () => {
 
       // API for accessing last hand history
       const lastHistory = table.getLastHandHistory();
-      void lastHistory; // API demonstration
-      // Note: Returns null if history tracking is not yet implemented
+      expect(lastHistory).not.toBeNull();
+      expect(lastHistory?.events[lastHistory.events.length - 1]?.type).toBe(
+        'HAND_ENDED'
+      );
 
       // Verify API methods exist and are callable
       expect(typeof table.getCurrentHandHistory).toBe('function');

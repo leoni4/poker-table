@@ -3,14 +3,19 @@
  */
 
 import { ChipAmount } from '../core/money.js';
-import { TableState, PlayerId, PlayerStatus } from '../core/table.js';
-import { Result, ok, err } from '../core/result.js';
+import {
+  BettingRoundState,
+  TableState,
+  PlayerId,
+  PlayerStatus,
+} from '../core/table.js';
+import { Result, ok, err, isErr } from '../core/result.js';
 import { PokerError, ErrorCode, createError } from '../core/errors.js';
 import { PlayerAction, validateAction } from './actions.js';
 
 /**
- * Gets the next active player in turn order
- * Skips players who are folded, sitting out, or all-in
+ * Gets the next active player in turn order.
+ * Skips players who are folded, sitting out, or all-in.
  */
 function getNextActivePlayer(
   tableState: TableState,
@@ -28,12 +33,11 @@ function getNextActivePlayer(
     return undefined;
   }
 
-  // Start from the next player and wrap around
+  // Start from the next player and wrap around.
   for (let i = 1; i <= tableState.players.length; i++) {
     const nextIndex = (currentPlayerIndex + i) % tableState.players.length;
     const nextPlayer = tableState.players[nextIndex];
 
-    // Skip players who cannot act
     if (nextPlayer.status === PlayerStatus.Active && nextPlayer.stack > 0n) {
       return nextPlayer.id;
     }
@@ -43,7 +47,7 @@ function getNextActivePlayer(
 }
 
 /**
- * Gets all players who can still act in the betting round
+ * Gets all players who can still take a betting action.
  */
 function getActivePlayers(tableState: TableState): PlayerId[] {
   return tableState.players
@@ -52,12 +56,27 @@ function getActivePlayers(tableState: TableState): PlayerId[] {
 }
 
 /**
- * Gets the current highest bet in the betting round
+ * Gets all players who are still contesting the hand.
+ */
+function getPlayersInHand(tableState: TableState): TableState['players'] {
+  return tableState.players.filter(
+    (p) =>
+      p.status === PlayerStatus.Active || p.status === PlayerStatus.AllIn
+  );
+}
+
+/**
+ * Gets the current highest commitment in the betting round.
  */
 function getCurrentBet(tableState: TableState): ChipAmount {
+  if (tableState.bettingRound?.street === tableState.phase) {
+    return tableState.bettingRound.currentBet;
+  }
+
   if (tableState.players.length === 0) {
     return 0n;
   }
+
   return tableState.players.reduce(
     (max, player) => (player.committed > max ? player.committed : max),
     0n
@@ -65,37 +84,120 @@ function getCurrentBet(tableState: TableState): ChipAmount {
 }
 
 /**
- * Checks if all active players have matched the current bet
+ * Creates betting-round state for a state snapshot that does not have it yet.
+ *
+ * This is primarily a backwards-compatibility path for consumers/tests that
+ * construct TableState manually. Live Table hands initialize the state
+ * explicitly at the start of every street.
  */
-function haveAllPlayersActed(tableState: TableState): boolean {
-  const currentBet = getCurrentBet(tableState);
-  const activePlayers = tableState.players.filter(
-    (p) => p.status === PlayerStatus.Active
-  );
+export interface StartBettingRoundOptions {
+  currentBet?: ChipAmount;
+  lastRaiseSize?: ChipAmount;
+  minimumBet?: ChipAmount;
+}
 
-  // If no active players or only one, round is complete
-  if (activePlayers.length <= 1) {
-    return true;
+function createRoundState(
+  tableState: TableState,
+  options: StartBettingRoundOptions = {}
+): BettingRoundState {
+  const currentBet = options.currentBet ?? getCurrentBet(tableState);
+
+  return {
+    street: tableState.phase,
+    currentBet,
+    lastRaiseSize:
+      options.lastRaiseSize ??
+      (currentBet > 0n ? currentBet : (options.minimumBet ?? 0n)),
+    minimumBet: options.minimumBet,
+    actedPlayerIds: [],
+    actedAtBet: [],
+  };
+}
+
+function getRoundState(tableState: TableState): BettingRoundState | undefined {
+  if (
+    tableState.bettingRound &&
+    tableState.bettingRound.street === tableState.phase
+  ) {
+    return tableState.bettingRound;
   }
 
-  // All active players with chips must have matched the current bet
-  for (const player of activePlayers) {
-    // Players with no stack are all-in and don't need to match
-    if (player.stack === 0n) {
-      continue;
-    }
+  return undefined;
+}
 
-    // Player hasn't matched the current bet
-    if (player.committed < currentBet) {
-      return false;
-    }
+function addActedPlayer(
+  bettingRound: BettingRoundState,
+  playerId: PlayerId
+): void {
+  if (!bettingRound.actedPlayerIds.includes(playerId)) {
+    bettingRound.actedPlayerIds.push(playerId);
   }
+}
 
-  return true;
+function recordActionAtBet(
+  bettingRound: BettingRoundState,
+  playerId: PlayerId,
+  bet: ChipAmount
+): void {
+  const actedAtBet = bettingRound.actedAtBet ?? [];
+  const existing = actedAtBet.find((entry) => entry.playerId === playerId);
+  if (existing) {
+    existing.bet = bet;
+  } else {
+    actedAtBet.push({ playerId, bet });
+  }
+  bettingRound.actedAtBet = actedAtBet;
 }
 
 /**
- * Initializes a betting round
+ * Checks whether all players who can act have both matched the current bet and
+ * received the action they are owed on this street.
+ */
+function haveAllPlayersActed(tableState: TableState): boolean {
+  const playersInHand = getPlayersInHand(tableState);
+
+  // No betting remains if only one player is still contesting the hand.
+  if (playersInHand.length <= 1) {
+    return true;
+  }
+
+  const actionablePlayers = playersInHand.filter(
+    (p) => p.status === PlayerStatus.Active && p.stack > 0n
+  );
+
+  // Everyone relevant is all-in.
+  if (actionablePlayers.length === 0) {
+    return true;
+  }
+
+  const currentBet = getCurrentBet(tableState);
+
+  // A player who can still act must first match the current bet.
+  if (actionablePlayers.some((player) => player.committed < currentBet)) {
+    return false;
+  }
+
+  // If only one player can act and everybody else is all-in, there is nobody
+  // left to bet against. Once that player has matched, the round is complete.
+  if (actionablePlayers.length === 1) {
+    return true;
+  }
+
+  const bettingRound = getRoundState(tableState);
+
+  // Backwards compatibility for manually-created TableState snapshots from the
+  // pre-bettingRound API: preserve the historical "matched bet" behaviour.
+  if (!bettingRound) {
+    return true;
+  }
+
+  return actionablePlayers.every((player) =>
+    bettingRound.actedPlayerIds.includes(player.id)
+  );
+}
+
+/**
+ * Initializes a betting round.
  *
  * @param tableState - Current table state
  * @param startingPlayerId - Player who should act first
@@ -103,9 +205,9 @@ function haveAllPlayersActed(tableState: TableState): boolean {
  */
 export function startBettingRound(
   tableState: TableState,
-  startingPlayerId: PlayerId
+  startingPlayerId: PlayerId,
+  options: StartBettingRoundOptions = {}
 ): Result<TableState, PokerError> {
-  // Verify starting player exists
   const startingPlayer = tableState.players.find(
     (p) => p.id === startingPlayerId
   );
@@ -119,7 +221,6 @@ export function startBettingRound(
     );
   }
 
-  // Verify starting player can act
   if (
     startingPlayer.status !== PlayerStatus.Active ||
     startingPlayer.stack === 0n
@@ -132,14 +233,17 @@ export function startBettingRound(
     );
   }
 
+  const bettingRound = createRoundState(tableState, options);
+
   return ok({
     ...tableState,
     currentPlayerId: startingPlayerId,
+    bettingRound,
   });
 }
 
 /**
- * Applies a player action to the betting round state
+ * Applies a player action to the betting round state.
  *
  * @param tableState - Current table state
  * @param playerId - ID of player performing the action
@@ -151,13 +255,11 @@ export function applyActionToBettingRound(
   playerId: PlayerId,
   action: PlayerAction
 ): Result<TableState, PokerError> {
-  // Validate the action first
   const validationResult = validateAction(tableState, playerId, action);
-  if (!validationResult.ok) {
-    return validationResult;
+  if (isErr(validationResult)) {
+    return err(validationResult.error);
   }
 
-  // Find the player
   const playerIndex = tableState.players.findIndex((p) => p.id === playerId);
   if (playerIndex === -1) {
     return err(
@@ -171,24 +273,34 @@ export function applyActionToBettingRound(
   const player = tableState.players[playerIndex];
   const currentBet = getCurrentBet(tableState);
 
-  // Create a copy of the table state to modify
+  const existingRoundState = getRoundState(tableState);
+  const bettingRound: BettingRoundState = existingRoundState
+    ? {
+        ...existingRoundState,
+        actedPlayerIds: [...existingRoundState.actedPlayerIds],
+        actedAtBet: existingRoundState.actedAtBet?.map((entry) => ({ ...entry })),
+      }
+    : createRoundState(tableState);
+
   const newTableState: TableState = {
     ...tableState,
     players: [...tableState.players],
+    bettingRound,
   };
 
-  // Clone the specific player to modify
   const newPlayer = { ...player };
   newTableState.players[playerIndex] = newPlayer;
 
-  // Apply the action
   switch (action.type) {
     case 'FOLD':
       newPlayer.status = PlayerStatus.Folded;
+      addActedPlayer(bettingRound, playerId);
+      recordActionAtBet(bettingRound, playerId, currentBet);
       break;
 
     case 'CHECK':
-      // No state changes needed for check
+      addActedPlayer(bettingRound, playerId);
+      recordActionAtBet(bettingRound, playerId, currentBet);
       break;
 
     case 'CALL': {
@@ -199,10 +311,12 @@ export function applyActionToBettingRound(
       newPlayer.stack -= actualCallAmount;
       newPlayer.committed += actualCallAmount;
 
-      // If player has no chips left after calling, mark as all-in
       if (newPlayer.stack === 0n) {
         newPlayer.status = PlayerStatus.AllIn;
       }
+
+      addActedPlayer(bettingRound, playerId);
+      recordActionAtBet(bettingRound, playerId, currentBet);
       break;
     }
 
@@ -216,10 +330,15 @@ export function applyActionToBettingRound(
       newPlayer.stack -= action.amount;
       newPlayer.committed += action.amount;
 
-      // If player has no chips left after betting, mark as all-in
       if (newPlayer.stack === 0n) {
         newPlayer.status = PlayerStatus.AllIn;
       }
+
+      bettingRound.currentBet = newPlayer.committed;
+      bettingRound.lastRaiseSize = action.amount;
+      bettingRound.lastAggressorId = playerId;
+      bettingRound.actedPlayerIds = [playerId];
+      recordActionAtBet(bettingRound, playerId, bettingRound.currentBet);
       break;
     }
 
@@ -239,10 +358,15 @@ export function applyActionToBettingRound(
       newPlayer.stack -= totalAmount;
       newPlayer.committed += totalAmount;
 
-      // If player has no chips left after raising, mark as all-in
       if (newPlayer.stack === 0n) {
         newPlayer.status = PlayerStatus.AllIn;
       }
+
+      bettingRound.currentBet = newPlayer.committed;
+      bettingRound.lastRaiseSize = action.amount;
+      bettingRound.lastAggressorId = playerId;
+      bettingRound.actedPlayerIds = [playerId];
+      recordActionAtBet(bettingRound, playerId, bettingRound.currentBet);
       break;
     }
 
@@ -251,11 +375,37 @@ export function applyActionToBettingRound(
       newPlayer.stack = 0n;
       newPlayer.committed += allInAmount;
       newPlayer.status = PlayerStatus.AllIn;
+
+      if (newPlayer.committed > currentBet) {
+        const raiseSize = newPlayer.committed - currentBet;
+        const isOpeningBet = currentBet === 0n;
+        const minimumBet = bettingRound.minimumBet ?? 0n;
+        const isFullRaise = isOpeningBet
+          ? minimumBet === 0n || newPlayer.committed >= minimumBet
+          : bettingRound.lastRaiseSize === 0n ||
+            raiseSize >= bettingRound.lastRaiseSize;
+
+        bettingRound.currentBet = newPlayer.committed;
+
+        if (isFullRaise) {
+          bettingRound.lastRaiseSize = isOpeningBet
+            ? newPlayer.committed
+            : raiseSize;
+          bettingRound.lastAggressorId = playerId;
+          bettingRound.actedPlayerIds = [playerId];
+        } else {
+          addActedPlayer(bettingRound, playerId);
+        }
+        recordActionAtBet(bettingRound, playerId, bettingRound.currentBet);
+      } else {
+        addActedPlayer(bettingRound, playerId);
+        recordActionAtBet(bettingRound, playerId, currentBet);
+      }
+
       break;
     }
   }
 
-  // Move to the next player
   const nextPlayerId = getNextActivePlayer(newTableState, playerId);
   newTableState.currentPlayerId = nextPlayerId;
 
@@ -263,29 +413,29 @@ export function applyActionToBettingRound(
 }
 
 /**
- * Checks if the current betting round is complete
+ * Checks if the current betting round is complete.
  *
  * A betting round is complete when:
- * - Only one or zero active players remain, OR
- * - All active players have matched the current bet and had a chance to act
+ * - Only one player remains in the hand, OR
+ * - No player can act because everybody relevant is all-in, OR
+ * - Every player who can act has matched the current bet and has acted since
+ *   the latest full aggressive action.
  *
  * @param tableState - Current table state
  * @returns True if the betting round is complete
  */
 export function isBettingRoundComplete(tableState: TableState): boolean {
-  const activePlayers = getActivePlayers(tableState);
+  const playersInHand = getPlayersInHand(tableState);
 
-  // If one or zero active players remain, round is complete
-  if (activePlayers.length <= 1) {
+  if (playersInHand.length <= 1) {
     return true;
   }
 
-  // Check if all active players have matched the current bet
   return haveAllPlayersActed(tableState);
 }
 
 /**
- * Gets the current betting round state information
+ * Gets the current betting round state information.
  *
  * @param tableState - Current table state
  * @returns Betting round state information

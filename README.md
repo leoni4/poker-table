@@ -11,7 +11,7 @@ A TypeScript-based poker engine that simulates a complete No-Limit Texas Hold'em
 - **Betting logic**: All standard actions (fold, check, call, bet, raise, all-in)
 - **Pot calculation**: Main pots and side pots for all-in scenarios
 - **Hand evaluation**: Automatic determination of winners at showdown
-- **Result-based error handling**: No exceptions, all operations return `Result<T, Error>`
+- **Result-based table operations**: Table mutations return `Result<T, Error>` instead of throwing for normal game-flow errors
 
 ## Installation
 
@@ -30,6 +30,7 @@ import {
   createPlayerId,
   chips,
   TablePhase,
+  getAvailableActions,
   isOk,
 } from '@leoni4/poker-table';
 
@@ -68,21 +69,12 @@ while (state.phase !== TablePhase.Showdown) {
 
   // Decide on an action (this would be your bot/AI or user input)
   // For this example, we'll just call or check
-  const player = state.players.find((p) => p.id === state.currentPlayerId);
-  if (!player) break;
-
-  const amountToCall = state.players.reduce(
-    (max, p) => (p.committed > max ? p.committed : max),
-    0n
-  );
-  const needsToCall = amountToCall - player.committed;
-
-  let action;
-  if (needsToCall > 0n) {
-    action = { type: 'CALL' as const };
-  } else {
-    action = { type: 'CHECK' as const };
-  }
+  const legalActions = getAvailableActions(state, state.currentPlayerId);
+  const action = legalActions.includes('CHECK')
+    ? { type: 'CHECK' as const }
+    : legalActions.includes('CALL')
+      ? { type: 'CALL' as const }
+      : { type: 'FOLD' as const };
 
   // Apply the action
   const actionResult = table.applyAction(state.currentPlayerId, action);
@@ -97,7 +89,7 @@ while (state.phase !== TablePhase.Showdown) {
 // Hand complete
 console.log(`Hand finished in ${state.phase} phase`);
 console.log(`Final community cards: ${state.communityCards.length}`);
-console.log('Final pot distribution:', state.pots);
+console.log('Final result:', table.getLastHandResult());
 ```
 
 ## Usage Guide
@@ -131,7 +123,7 @@ const config = {
     percentage: 0.05, // 5%
     cap: chips(10), // Max rake per hand
   },
-  rngSeed: 42, // Optional seed for deterministic behavior (testing)
+  rngSeed: 42, // Optional deterministic RNG stream seed
 };
 
 const table = new HoldemTable(config);
@@ -216,10 +208,12 @@ const allInAction: PlayerAction = { type: 'ALL_IN' };
 
 ### Reading Table State
 
-The `getState()` method returns a complete snapshot of the table:
+`getState()` returns the complete privileged engine snapshot, including every player's hole cards. Server applications should use `getStateForPlayer(playerId)` (or call it without an ID for a spectator) before sending state to a client.
 
 ```typescript
-const state = table.getState();
+import { cardToString } from '@leoni4/poker-table';
+
+const state = table.getStateForPlayer(alice);
 
 // Check current phase
 console.log(`Phase: ${state.phase}`);
@@ -232,7 +226,7 @@ if (state.currentPlayerId) {
 
 // View community cards
 console.log(
-  `Board: ${state.communityCards.map((c) => c.toString()).join(' ')}`
+  `Board: ${state.communityCards.map(cardToString).join(' ')}`
 );
 
 // View players
@@ -241,7 +235,7 @@ for (const player of state.players) {
   console.log(`  Committed: ${player.committed}`);
   if (player.holeCards.cards) {
     console.log(
-      `  Cards: ${player.holeCards.cards.map((c) => c.toString()).join(' ')}`
+      `  Cards: ${player.holeCards.cards.map(cardToString).join(' ')}`
     );
   }
 }
@@ -258,7 +252,7 @@ for (const pot of state.pots) {
 Here's a robust game loop for processing a complete hand:
 
 ```typescript
-import { TablePhase, isOk } from '@leoni4/poker-table';
+import { TablePhase, getAvailableActions, isOk } from '@leoni4/poker-table';
 
 // Start hand
 const startResult = table.startHand();
@@ -300,17 +294,11 @@ console.log(`Final phase: ${state.phase}`);
 
 // Example bot logic
 function decideAction(state, playerId) {
-  // Your decision logic here
-  // For example, always call or check
-  const player = state.players.find((p) => p.id === playerId);
-  const currentBet = Math.max(...state.players.map((p) => p.committed));
-  const needsToCall = currentBet - player.committed;
+  const legalActions = getAvailableActions(state, playerId);
 
-  if (needsToCall > 0n) {
-    return { type: 'CALL' };
-  } else {
-    return { type: 'CHECK' };
-  }
+  if (legalActions.includes('CHECK')) return { type: 'CHECK' };
+  if (legalActions.includes('CALL')) return { type: 'CALL' };
+  return { type: 'FOLD' };
 }
 ```
 
@@ -329,7 +317,7 @@ interface TableConfig {
   ante?: ChipAmount; // Optional ante per player
   straddle?: ChipAmount; // Optional straddle amount
   rake?: RakeConfig; // Optional rake configuration
-  rngSeed?: number; // Optional RNG seed for testing
+  rngSeed?: number; // Optional seed for a deterministic table RNG stream
 }
 ```
 
@@ -346,6 +334,8 @@ interface TableState {
   communityCards: Card[]; // Board cards
   pots: PotState[]; // All pots (main + side pots)
   currentPlayerId?: PlayerId; // Player to act next
+  bettingRound?: BettingRoundState; // Explicit current-street betting state
+  lastHandResult?: HandResult; // Structured result of most recently completed hand
 }
 
 enum TablePhase {
@@ -367,7 +357,7 @@ interface PlayerState {
   id: PlayerId; // Unique identifier
   seat: number; // Seat position (0-based)
   stack: ChipAmount; // Current chip stack
-  committed: ChipAmount; // Chips in pot this hand
+  committed: ChipAmount; // Live wager on the current street (antes excluded)
   status: PlayerStatus; // Current status
   holeCards: HoleCards; // Private cards
 }
@@ -396,8 +386,8 @@ type PlayerActionType = 'FOLD' | 'CHECK' | 'CALL' | 'BET' | 'RAISE' | 'ALL_IN';
 ### Utility Types
 
 ```typescript
-// Branded type for chip amounts (uses bigint)
-type ChipAmount = bigint & { readonly __brand: 'ChipAmount' };
+// Chip amounts use bigint exactly
+type ChipAmount = bigint;
 
 // Create chip amounts
 const amount = chips(100); // 100 chips
@@ -421,7 +411,7 @@ if (isOk(result)) {
 
 ## Error Handling
 
-All operations return a `Result` type - never throw exceptions:
+Table operations use the `Result` type for normal game-flow errors:
 
 ```typescript
 const result = table.seatPlayer(playerId, chips(1000));
@@ -446,39 +436,73 @@ Common error codes:
 - `INSUFFICIENT_STACK` - Player doesn't have enough chips
 - `INVALID_BET_AMOUNT` - Bet/raise amount invalid
 
-## Hand History
+## Legal Actions and Betting Semantics
 
-Track what happened during hands:
+Use the exported betting helpers instead of reconstructing legality from `committed` values in consumer code:
 
 ```typescript
-// Get current hand history (hand in progress)
-const currentHistory = table.getCurrentHandHistory();
+const legal = getAvailableActions(state, state.currentPlayerId!);
+const toCall = getCallAmount(state, state.currentPlayerId!);
+const minRaiseSize = getMinimumRaiseSize(state);
+```
 
-// Get last completed hand
+`BET` is only valid when the street has no current wager. `RAISE` is only valid when a wager already exists, and `RAISE.amount` is the **raise increment**, not the final total-to amount. Antes are dead money and are not part of `PlayerState.committed`. Short all-ins are represented with `ALL_IN`; they do not become a full raise unless they reach the current minimum raise rules.
+
+## Hand Result
+
+The engine exposes the result it already computed at showdown, so consumers do not need to run their own hand evaluator:
+
+```typescript
+const result = table.getLastHandResult();
+
+if (result) {
+  console.log(result.reason); // 'fold' | 'showdown'
+  console.log(result.finalBoard.map(cardToString));
+
+  for (const pot of result.pots) {
+    console.log('Winners:', pot.winnerIds);
+    console.log('Payouts:', pot.payouts);
+    console.log('Rake:', pot.rake);
+    console.log('Winning category:', pot.winningHand?.category);
+    console.log('Best five:', pot.winningHand?.bestCards.map(cardToString));
+  }
+}
+```
+
+`TableState.lastHandResult` contains the same structured result in state snapshots.
+
+## Hand History
+
+Hand history is populated live and records hand start, forced bets, cards, actions, street transitions, showdown, pot distribution, and hand end:
+
+```typescript
+const currentHistory = table.getCurrentHandHistory();
 const lastHistory = table.getLastHandHistory();
 
 if (lastHistory) {
-  console.log(`Hand #${lastHistory.handId}`);
-  console.log(`Started: ${lastHistory.startTime}`);
-  console.log(`Events: ${lastHistory.events.length}`);
-
-  // Process events
   for (const event of lastHistory.events) {
     switch (event.type) {
-      case 'HAND_STARTED':
-        console.log('Hand started');
-        break;
       case 'BLINDS_POSTED':
-        console.log(`Blinds posted by ${event.postingPlayers.join(', ')}`);
+        console.log(event.smallBlind, event.bigBlind, event.antes);
         break;
       case 'ACTION_TAKEN':
-        console.log(`${event.playerId} ${event.action.type}`);
+        console.log(event.playerId, event.action, event.amount);
         break;
-      // ... other event types
+      case 'POT_DISTRIBUTED':
+        console.log(event.pots); // amount, winners/shares, optional rake
+        break;
     }
   }
 }
 ```
+
+Hand history is a **privileged audit log**: `CARDS_DEALT` contains all dealt hole cards. Do not send a current hand history directly to an untrusted client.
+
+## Deterministic Training / Mirrored Evaluation
+
+When `rngSeed` is set, a `HoldemTable` owns one deterministic RNG stream. Two fresh tables created with the same seed and the same seating/action sequence receive the same card sequence. The stream advances between hands; calling `startHand()` repeatedly does **not** recreate the same first deck.
+
+For mirrored A-vs-B / B-vs-A evaluation, create two fresh table instances with the same seed and the same seat/button schedule, then swap which agent occupies each seat. For independently parallelized hands, derive a deterministic per-hand seed and create a fresh table for that hand. `HandHistory` timestamps use wall-clock time and therefore are not deterministic bytes even when the cards and actions are deterministic.
 
 ## Testing & Quality
 

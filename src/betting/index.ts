@@ -7,10 +7,13 @@ export {
   PlayerActionType,
   TableError,
   getAvailableActions,
+  getCallAmount,
+  getMinimumRaiseSize,
   validateAction,
 } from './actions.js';
 
 export {
+  StartBettingRoundOptions,
   startBettingRound,
   applyActionToBettingRound,
   isBettingRoundComplete,

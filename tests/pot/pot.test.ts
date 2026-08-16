@@ -284,6 +284,30 @@ describe('Pot Management', () => {
       expect(result.payouts[1].amount).toBe(chips(50));
     });
 
+    it('should distribute multiple odd chips one per winner in order', () => {
+      const pot = {
+        total: chips(5),
+        participants: [
+          createPlayerId('p1'),
+          createPlayerId('p2'),
+          createPlayerId('p3'),
+        ],
+      };
+      const winners = [
+        createPlayerId('p1'),
+        createPlayerId('p2'),
+        createPlayerId('p3'),
+      ];
+
+      const result = distributePot(pot, winners, 0);
+
+      expect(result.payouts.map((payout) => payout.amount)).toEqual([
+        chips(2),
+        chips(2),
+        chips(1),
+      ]);
+    });
+
     it('should only pay eligible winners', () => {
       const pot = {
         total: chips(100),

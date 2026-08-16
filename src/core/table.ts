@@ -4,6 +4,7 @@
 
 import { ChipAmount } from './money.js';
 import { Card } from './card.js';
+import type { EvaluatedHand } from '../hand-eval/types.js';
 
 /**
  * Branded type for player ID to prevent mixing with other strings
@@ -125,7 +126,8 @@ export interface PlayerState {
   stack: ChipAmount;
 
   /**
-   * Amount committed to the pot in current hand
+   * Amount committed on the current betting street.
+   * Reset to zero when the hand advances to a new street.
    */
   committed: ChipAmount;
 
@@ -174,6 +176,62 @@ export enum TablePhase {
 }
 
 /**
+ * Explicit state for the current betting street.
+ *
+ * `actedPlayerIds` contains players who have acted since the latest full
+ * aggressive action (bet / full raise). This lets the engine distinguish
+ * "bets are matched" from "everyone who still needs a turn has acted".
+ */
+export interface BettingRoundState {
+  /** Street this state belongs to. */
+  street: TablePhase;
+
+  /** Highest amount committed by a player on this street. */
+  currentBet: ChipAmount;
+
+  /**
+   * Size of the latest full bet/raise increment.
+   * Used to validate the minimum size of a subsequent RAISE.
+   */
+  lastRaiseSize: ChipAmount;
+
+  /** Player who made the latest full aggressive action, if any. */
+  lastAggressorId?: PlayerId;
+
+  /** Players who have acted since the latest full aggressive action. */
+  actedPlayerIds: PlayerId[];
+
+  /** Minimum full opening bet for this street (normally the big blind). */
+  minimumBet?: ChipAmount;
+
+  /** Bet level each player was facing after their most recent action. */
+  actedAtBet?: Array<{ playerId: PlayerId; bet: ChipAmount }>;
+}
+
+/** Result for one settled pot in a completed hand. */
+export interface SettledPotResult {
+  potIndex: number;
+  total: ChipAmount;
+  winnerIds: PlayerId[];
+  payouts: Array<{ playerId: PlayerId; amount: ChipAmount }>;
+  rake: ChipAmount;
+  winningHand?: EvaluatedHand;
+}
+
+/** Public result of the most recently completed hand. */
+export interface HandResult {
+  handId: number;
+  reason: 'fold' | 'showdown';
+  finalBoard: Card[];
+  revealedPlayers: Array<{
+    playerId: PlayerId;
+    holeCards: [Card, Card];
+  }>;
+  pots: SettledPotResult[];
+  totalRake: ChipAmount;
+}
+
+/**
  * Complete table state
  */
 export interface TableState {
@@ -215,6 +273,18 @@ export interface TableState {
    * undefined if no action is pending
    */
   currentPlayerId?: PlayerId;
+
+  /**
+   * Explicit state for the current betting street.
+   *
+   * Optional for backwards compatibility with callers that construct
+   * `TableState` snapshots manually. The table engine always initializes it
+   * for live hands.
+   */
+  bettingRound?: BettingRoundState;
+
+  /** Result of the most recently completed hand, if any. */
+  lastHandResult?: HandResult;
 }
 
 /**

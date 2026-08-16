@@ -60,13 +60,22 @@ export class HoldemTable {
    * - Pot information
    * - Current player to act
    *
-   * Note: The returned state includes all players' hole cards. Server implementations
-   * should filter hole cards before sending state to clients to maintain privacy.
+   * Note: This is the privileged engine snapshot and includes all players' hole
+   * cards. Server implementations should use getStateForPlayer() before sending
+   * state to an untrusted client.
    *
    * @returns Complete table state
    */
   getState(): TableState {
     return this.table.getState();
+  }
+
+  /**
+   * Gets a player-safe table snapshot with opponents' private cards hidden.
+   * Pass no player ID for an observer/spectator view.
+   */
+  getStateForPlayer(viewerId?: PlayerId): TableState {
+    return this.table.getStateForPlayer(viewerId);
   }
 
   /**
@@ -137,8 +146,8 @@ export class HoldemTable {
    * 6. Set up the initial betting round
    *
    * Requirements:
-   * - Table must be in Idle phase
-   * - Must have minimum number of active players
+   * - No betting hand may currently be in progress
+   * - Must have minimum number of funded, non-sitting-out players
    *
    * @returns Result with updated table state or error
    */
@@ -208,6 +217,11 @@ export class HoldemTable {
    */
   getLastHandHistory(): ReturnType<Table['getLastHandHistory']> {
     return this.table.getLastHandHistory();
+  }
+
+  /** Get the structured result of the most recently completed hand. */
+  getLastHandResult(): ReturnType<Table['getLastHandResult']> {
+    return this.table.getLastHandResult();
   }
 }
 

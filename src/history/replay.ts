@@ -19,6 +19,7 @@ import {
   isCardsDealtEvent,
   isActionTakenEvent,
   isStreetEndedEvent,
+  isShowdownEvent,
   isPotDistributedEvent,
   isHandEndedEvent,
 } from './events.js';
@@ -79,14 +80,14 @@ export function replayHand(
 function applyEventToState(
   state: TableState,
   event: HandEvent,
-  _config: TableConfig
+  config: TableConfig
 ): TableState {
   if (isHandStartedEvent(event)) {
     return applyHandStarted(state, event);
   }
 
   if (isBlindsPostedEvent(event)) {
-    return applyBlindsPosted(state, event);
+    return applyBlindsPosted(state, event, config);
   }
 
   if (isCardsDealtEvent(event)) {
@@ -99,6 +100,14 @@ function applyEventToState(
 
   if (isStreetEndedEvent(event)) {
     return applyStreetEnded(state, event);
+  }
+
+  if (isShowdownEvent(event)) {
+    return {
+      ...state,
+      phase: TablePhase.Showdown,
+      currentPlayerId: undefined,
+    };
   }
 
   if (isPotDistributedEvent(event)) {
@@ -149,17 +158,18 @@ function applyHandStarted(
  */
 function applyBlindsPosted(
   state: TableState,
-  event: HandEvent & { type: 'BLINDS_POSTED' }
+  event: HandEvent & { type: 'BLINDS_POSTED' },
+  config: TableConfig
 ): TableState {
   const newState = { ...state };
   const players = state.players.map((p) => ({ ...p }));
 
-  // Apply antes if present
+  // Antes are dead money: they contribute to the pot but do not count
+  // toward a player's live preflop wager.
   if (event.antes) {
     for (const ante of event.antes) {
       const player = players.find((p) => p.id === ante.playerId);
       if (player) {
-        player.committed += ante.amount;
         player.stack -= ante.amount;
         if (player.stack === 0n) {
           player.status = PlayerStatus.AllIn;
@@ -204,27 +214,41 @@ function applyBlindsPosted(
     }
   }
 
-  // Calculate total committed and create initial pot
-  const totalCommitted = players.reduce((sum, p) => sum + p.committed, 0n);
-  const pots =
-    totalCommitted > 0n
-      ? [
-          {
-            total: totalCommitted,
-            participants: players
-              .filter((p) => p.committed > 0n)
-              .map((p) => p.id),
-          },
-        ]
-      : [];
+  // Build the visible pot from every forced contribution, including dead
+  // antes, while keeping street commitments limited to live wagers.
+  const forcedContributions = [
+    ...(event.antes ?? []),
+    ...(event.smallBlind ? [event.smallBlind] : []),
+    ...(event.bigBlind ? [event.bigBlind] : []),
+    ...(event.straddle ? [event.straddle] : []),
+  ];
+  const potTotal = forcedContributions.reduce(
+    (sum, contribution) => sum + contribution.amount,
+    0n
+  );
+  const participants = [
+    ...new Set(forcedContributions.map((contribution) => contribution.playerId)),
+  ];
+  const pots = potTotal > 0n ? [{ total: potTotal, participants }] : [];
 
   // Transition to Preflop phase
   newState.phase = TablePhase.Preflop;
   newState.players = players;
   newState.pots = pots;
 
-  // Set first player to act
-  newState.currentPlayerId = determineFirstToAct(players, state.dealerSeat);
+  // Set first player to act from the actual last forced-bet seat, not from
+  // dealerSeat + 2 (which is wrong when seats are sparse or straddled).
+  const lastForcedSeat = determineLastForcedSeat(
+    players,
+    state.dealerSeat,
+    event,
+    config
+  );
+  newState.currentPlayerId = determineFirstToAct(
+    players,
+    state.dealerSeat,
+    lastForcedSeat
+  );
 
   return newState;
 }
@@ -261,67 +285,76 @@ function applyActionTaken(
   state: TableState,
   event: HandEvent & { type: 'ACTION_TAKEN' }
 ): TableState {
-  const players = state.players.map((p) => ({ ...p }));
+  const players = state.players.map((p) => ({
+    ...p,
+    holeCards: p.holeCards.cards
+      ? { cards: [...p.holeCards.cards] as [number, number] }
+      : {},
+  }));
   const player = players.find((p) => p.id === event.playerId);
 
   if (!player) {
     return state;
   }
 
-  switch (event.action) {
-    case 'FOLD':
-      player.status = PlayerStatus.Folded;
-      break;
+  const actingSeat = player.seat;
 
-    case 'CHECK':
-      // No state change for check
-      break;
+  if (event.action === 'FOLD') {
+    player.status = PlayerStatus.Folded;
+  } else if (event.action !== 'CHECK') {
+    let actualAmount: bigint;
 
-    case 'CALL': {
-      // Calculate call amount (highest commitment - player's commitment)
-      const maxCommitted = Math.max(...players.map((p) => Number(p.committed)));
-      const callAmount = BigInt(maxCommitted) - player.committed;
-      const actualAmount =
-        callAmount > player.stack ? player.stack : callAmount;
-
-      player.stack -= actualAmount;
-      player.committed += actualAmount;
-
-      if (player.stack === 0n) {
-        player.status = PlayerStatus.AllIn;
+    if (event.committedAfter !== undefined) {
+      actualAmount = event.committedAfter - player.committed;
+      if (actualAmount < 0n) {
+        actualAmount = 0n;
       }
-      break;
+      if (actualAmount > player.stack) {
+        actualAmount = player.stack;
+      }
+    } else {
+      // Backward-compatible replay for histories recorded before
+      // committedAfter existed. RAISE.amount is a raise *size*, so it must
+      // include the outstanding call before the raise increment.
+      const currentBet = players.reduce(
+        (max, candidate) =>
+          candidate.committed > max ? candidate.committed : max,
+        0n
+      );
+      const callAmount =
+        currentBet > player.committed ? currentBet - player.committed : 0n;
+
+      switch (event.action) {
+        case 'CALL':
+          actualAmount = callAmount;
+          break;
+        case 'BET':
+          actualAmount = event.amount ?? 0n;
+          break;
+        case 'RAISE':
+          actualAmount = callAmount + (event.amount ?? 0n);
+          break;
+        case 'ALL_IN':
+          actualAmount = player.stack;
+          break;
+        default:
+          actualAmount = 0n;
+      }
+
+      if (actualAmount > player.stack) {
+        actualAmount = player.stack;
+      }
     }
 
-    case 'BET':
-    case 'RAISE': {
-      if (event.amount !== undefined) {
-        const actualAmount =
-          event.amount > player.stack ? player.stack : event.amount;
-        player.stack -= actualAmount;
-        player.committed += actualAmount;
+    player.stack -= actualAmount;
+    player.committed += actualAmount;
 
-        if (player.stack === 0n || event.allIn) {
-          player.status = PlayerStatus.AllIn;
-        }
-      }
-      break;
-    }
-
-    case 'ALL_IN': {
-      const allInAmount = player.stack;
-      player.committed += allInAmount;
-      player.stack = 0n;
+    if (player.stack === 0n || event.allIn) {
       player.status = PlayerStatus.AllIn;
-      break;
     }
   }
 
-  // Move to next player
-  const activePlayers = players.filter((p) => p.status === PlayerStatus.Active);
-
-  const currentIndex = activePlayers.findIndex((p) => p.id === event.playerId);
-  const nextPlayer = activePlayers[(currentIndex + 1) % activePlayers.length];
+  const nextPlayer = findFirstActiveAfterSeat(players, actingSeat);
 
   return {
     ...state,
@@ -406,16 +439,15 @@ function applyHandEnded(
       ...p,
       stack: finalPlayer?.finalStack ?? p.stack,
       committed: 0n,
-      holeCards: {},
     };
   });
 
+  // Live Table keeps a completed hand inspectable in Showdown until the next
+  // hand starts. Replay should preserve the same final board/cards/pot view.
   return {
     ...state,
-    phase: TablePhase.Idle,
+    phase: TablePhase.Showdown,
     players,
-    communityCards: [],
-    pots: [],
     currentPlayerId: undefined,
   };
 }
@@ -426,36 +458,87 @@ function applyHandEnded(
  */
 function determineFirstToAct(
   players: PlayerState[],
-  dealerSeat: number | undefined
+  dealerSeat: number | undefined,
+  lastForcedSeat?: number
 ): PlayerId | undefined {
-  if (dealerSeat === undefined) {
-    return players[0]?.id;
-  }
-
-  const activePlayers = players.filter((p) => p.status === PlayerStatus.Active);
+  const activePlayers = players.filter(
+    (player) => player.status === PlayerStatus.Active && player.stack > 0n
+  );
 
   if (activePlayers.length === 0) {
     return undefined;
   }
 
-  // Find first player after dealer+2 (after big blind)
-  // For heads-up, dealer acts first
-  if (activePlayers.length === 2) {
-    return players.find((p) => p.seat === dealerSeat)?.id;
+  if (dealerSeat === undefined) {
+    return activePlayers[0]?.id;
   }
 
-  // Multi-way: find player after BB
-  const sortedPlayers = [...activePlayers].sort((a, b) => a.seat - b.seat);
-
-  // Find players after dealer
-  for (const player of sortedPlayers) {
-    if (player.seat > dealerSeat + 2) {
-      return player.id;
-    }
+  // Heads-up: the button/SB acts first preflop if able.
+  if (players.filter((player) => player.status !== PlayerStatus.SittingOut).length === 2) {
+    const dealer = activePlayers.find((player) => player.seat === dealerSeat);
+    return dealer?.id ?? activePlayers[0]?.id;
   }
 
-  // Wrap around
-  return sortedPlayers[0]?.id;
+  return findFirstActiveAfterSeat(
+    activePlayers,
+    lastForcedSeat ?? dealerSeat
+  )?.id;
+}
+
+function determineLastForcedSeat(
+  players: PlayerState[],
+  dealerSeat: number | undefined,
+  event: HandEvent & { type: 'BLINDS_POSTED' },
+  config: TableConfig
+): number | undefined {
+  const explicitLastPlayerId =
+    event.straddle?.playerId ?? event.bigBlind?.playerId;
+  const explicitLastPlayer = players.find(
+    (player) => player.id === explicitLastPlayerId
+  );
+  if (explicitLastPlayer) {
+    return explicitLastPlayer.seat;
+  }
+
+  if (dealerSeat === undefined) {
+    return undefined;
+  }
+
+  const occupiedSeats = players.map((player) => player.seat);
+  if (occupiedSeats.length <= 2) {
+    return getNextOccupiedSeat(occupiedSeats, dealerSeat);
+  }
+
+  const smallBlindSeat = getNextOccupiedSeat(occupiedSeats, dealerSeat);
+  if (smallBlindSeat === undefined) {
+    return undefined;
+  }
+  const bigBlindSeat = getNextOccupiedSeat(occupiedSeats, smallBlindSeat);
+  if (bigBlindSeat === undefined || config.straddle === undefined) {
+    return bigBlindSeat;
+  }
+  return getNextOccupiedSeat(occupiedSeats, bigBlindSeat);
+}
+
+function getNextOccupiedSeat(
+  occupiedSeats: number[],
+  fromSeat: number
+): number | undefined {
+  const sortedSeats = [...occupiedSeats].sort((a, b) => a - b);
+  return sortedSeats.find((seat) => seat > fromSeat) ?? sortedSeats[0];
+}
+
+function findFirstActiveAfterSeat(
+  players: PlayerState[],
+  seat: number
+): PlayerState | undefined {
+  const activePlayers = players
+    .filter((player) => player.status === PlayerStatus.Active && player.stack > 0n)
+    .sort((a, b) => a.seat - b.seat);
+
+  return (
+    activePlayers.find((player) => player.seat > seat) ?? activePlayers[0]
+  );
 }
 
 /**
@@ -486,7 +569,12 @@ function findFirstPlayerAfterDealer(
 function cloneState(state: TableState): TableState {
   return {
     ...state,
-    players: state.players.map((p) => ({ ...p })),
+    players: state.players.map((p) => ({
+      ...p,
+      holeCards: p.holeCards.cards
+        ? { cards: [...p.holeCards.cards] as [number, number] }
+        : {},
+    })),
     communityCards: [...state.communityCards],
     pots: state.pots.map((pot) => ({
       ...pot,

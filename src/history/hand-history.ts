@@ -131,6 +131,7 @@ interface SerializableActionTakenEvent extends SerializableBaseEvent {
   playerId: PlayerId;
   action: PlayerActionType;
   amount?: string;
+  committedAfter?: string;
   allIn?: boolean;
 }
 
@@ -163,6 +164,7 @@ interface SerializablePotDistributedEvent extends SerializableBaseEvent {
   type: 'POT_DISTRIBUTED';
   pots: Array<{
     amount: string;
+    rake?: string;
     winners: Array<{
       playerId: PlayerId;
       share: string;
@@ -330,6 +332,9 @@ function serializeEvent(event: HandEvent): SerializableHandEvent {
       if (event.amount !== undefined) {
         serialized.amount = serializeChipAmount(event.amount);
       }
+      if (event.committedAfter !== undefined) {
+        serialized.committedAfter = serializeChipAmount(event.committedAfter);
+      }
       if (event.allIn !== undefined) {
         serialized.allIn = event.allIn;
       }
@@ -364,6 +369,8 @@ function serializeEvent(event: HandEvent): SerializableHandEvent {
         type: 'POT_DISTRIBUTED',
         pots: event.pots.map((pot) => ({
           amount: serializeChipAmount(pot.amount),
+          rake:
+            pot.rake !== undefined ? serializeChipAmount(pot.rake) : undefined,
           winners: pot.winners.map((w) => ({
             playerId: w.playerId,
             share: serializeChipAmount(w.share),
@@ -463,6 +470,7 @@ function deserializeEvent(serialized: SerializableHandEvent): HandEvent {
         playerId: PlayerId;
         action: PlayerActionType;
         amount?: ChipAmount;
+        committedAfter?: ChipAmount;
         allIn?: boolean;
       } = {
         ...base,
@@ -472,6 +480,9 @@ function deserializeEvent(serialized: SerializableHandEvent): HandEvent {
       };
       if (serialized.amount !== undefined) {
         event.amount = deserializeChipAmount(serialized.amount);
+      }
+      if (serialized.committedAfter !== undefined) {
+        event.committedAfter = deserializeChipAmount(serialized.committedAfter);
       }
       if (serialized.allIn !== undefined) {
         event.allIn = serialized.allIn;
@@ -507,6 +518,8 @@ function deserializeEvent(serialized: SerializableHandEvent): HandEvent {
         type: 'POT_DISTRIBUTED',
         pots: serialized.pots.map((pot) => ({
           amount: deserializeChipAmount(pot.amount),
+          rake:
+            pot.rake !== undefined ? deserializeChipAmount(pot.rake) : undefined,
           winners: pot.winners.map((w) => ({
             playerId: w.playerId,
             share: deserializeChipAmount(w.share),

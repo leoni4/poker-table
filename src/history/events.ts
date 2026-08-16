@@ -71,6 +71,8 @@ export interface ActionTakenEvent extends BaseEvent {
   playerId: PlayerId;
   action: PlayerActionType;
   amount?: ChipAmount;
+  /** Exact street commitment after the action; enables faithful replay. */
+  committedAfter?: ChipAmount;
   allIn?: boolean;
 }
 
@@ -103,6 +105,7 @@ export interface PotDistributedEvent extends BaseEvent {
   type: 'POT_DISTRIBUTED';
   pots: Array<{
     amount: ChipAmount;
+    rake?: ChipAmount;
     winners: Array<{
       playerId: PlayerId;
       share: ChipAmount;

@@ -129,10 +129,27 @@ export function calculateRake(
     return 0n;
   }
 
-  // Calculate percentage-based rake
-  const percentageRake = BigInt(
-    Math.floor(Number(potAmount) * rakeConfig.percentage)
-  );
+  if (potAmount <= 0n || rakeConfig.percentage <= 0) {
+    return 0n;
+  }
+
+  // Convert the decimal percentage into an exact integer fraction before
+  // multiplying. Converting a large ChipAmount bigint to Number would lose
+  // precision above Number.MAX_SAFE_INTEGER.
+  const percentageText = rakeConfig.percentage.toString().toLowerCase();
+  const [coefficient, exponentText] = percentageText.split('e');
+  const [whole, fraction = ''] = coefficient.split('.');
+  const exponent = Number(exponentText ?? '0') - fraction.length;
+  let numerator = BigInt(`${whole}${fraction}`);
+  let denominator = 1n;
+
+  if (exponent >= 0) {
+    numerator *= 10n ** BigInt(exponent);
+  } else {
+    denominator = 10n ** BigInt(-exponent);
+  }
+
+  const percentageRake = (potAmount * numerator) / denominator;
 
   // Apply cap
   return percentageRake < rakeConfig.cap ? percentageRake : rakeConfig.cap;
@@ -173,7 +190,11 @@ export function distributePot(
 
   const payouts: Payout[] = eligibleWinners.map((playerId, index) => ({
     playerId,
-    amount: payoutPerWinner + (index === 0 ? remainder : 0n), // Give remainder to first winner
+    // Odd chips are awarded one at a time in winner order. The Table engine
+    // orders tied Hold'em winners clockwise from the button before calling
+    // this generic pot helper.
+    amount:
+      payoutPerWinner + (BigInt(index) < remainder ? 1n : 0n),
     potIndex,
   }));
 
