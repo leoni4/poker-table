@@ -43,6 +43,10 @@ export type TableError = PokerError;
  * Gets the current highest bet in the current betting round
  */
 function getCurrentBet(tableState: TableState): ChipAmount {
+  if (tableState.bettingRound?.street === tableState.phase) {
+    return tableState.bettingRound.currentBet;
+  }
+
   if (tableState.players.length === 0) {
     return 0n;
   }
@@ -55,7 +59,10 @@ function getCurrentBet(tableState: TableState): ChipAmount {
 /**
  * Gets the amount a player needs to call
  */
-function getCallAmount(tableState: TableState, playerId: PlayerId): ChipAmount {
+export function getCallAmount(
+  tableState: TableState,
+  playerId: PlayerId
+): ChipAmount {
   const player = tableState.players.find((p) => p.id === playerId);
   if (!player) {
     return 0n;
@@ -73,7 +80,7 @@ function getCallAmount(tableState: TableState, playerId: PlayerId): ChipAmount {
  * compatibility with manually-created TableState snapshots, fall back to the
  * current bet (the rule used by the pre-bettingRound implementation).
  */
-function getMinimumRaiseSize(tableState: TableState): ChipAmount {
+export function getMinimumRaiseSize(tableState: TableState): ChipAmount {
   const currentBet = getCurrentBet(tableState);
 
   if (currentBet === 0n) {
@@ -91,19 +98,24 @@ function getMinimumRaiseSize(tableState: TableState): ChipAmount {
 }
 
 /**
- * A full bet/raise resets actedPlayerIds to the aggressor. Therefore a player
- * who is still present in actedPlayerIds has already acted since the latest
- * full aggressive action and cannot re-raise over a short all-in.
+ * Track the bet level a player faced on their last action. Betting is reopened
+ * once subsequent wager increases cumulatively reach a full raise increment.
  */
 function canPlayerRaise(tableState: TableState, playerId: PlayerId): boolean {
   const bettingRound = tableState.bettingRound;
 
   if (!bettingRound || bettingRound.street !== tableState.phase) {
-    // Legacy snapshots did not track action reopening.
     return true;
   }
 
-  return !bettingRound.actedPlayerIds.includes(playerId);
+  const actedAt = bettingRound.actedAtBet?.find(
+    (entry) => entry.playerId === playerId
+  );
+  if (!actedAt) {
+    return true;
+  }
+
+  return getCurrentBet(tableState) - actedAt.bet >= bettingRound.lastRaiseSize;
 }
 
 /**
@@ -150,8 +162,17 @@ export function getAvailableActions(
     actions.push('CALL');
   }
 
-  // BET is available if there's no current bet and player has chips
-  if (currentBet === 0n && player.stack > 0n) {
+  // BET is available only when the player can make a full opening bet.
+  // A shorter opening wager must be expressed as ALL_IN.
+  const minimumBet =
+    tableState.bettingRound?.street === tableState.phase
+      ? tableState.bettingRound.minimumBet
+      : undefined;
+  if (
+    currentBet === 0n &&
+    player.stack > 0n &&
+    (minimumBet === undefined || player.stack >= minimumBet)
+  ) {
     actions.push('BET');
   }
 
@@ -287,7 +308,7 @@ export function validateAction(
       return ok(undefined);
     }
 
-    case 'BET':
+    case 'BET': {
       // Cannot bet if there's already a bet
       if (currentBet > 0n) {
         return err(
@@ -308,6 +329,19 @@ export function validateAction(
         );
       }
 
+      const minimumBet =
+        tableState.bettingRound?.street === tableState.phase
+          ? tableState.bettingRound.minimumBet
+          : undefined;
+      if (minimumBet !== undefined && action.amount < minimumBet) {
+        return err(
+          createError(
+            ErrorCode.INVALID_BET_AMOUNT,
+            `BET amount ${action.amount} is less than minimum bet of ${minimumBet}; use ALL_IN for a short all-in`
+          )
+        );
+      }
+
       // Cannot bet more than stack
       if (action.amount > player.stack) {
         return err(
@@ -319,6 +353,7 @@ export function validateAction(
       }
 
       return ok(undefined);
+    }
 
     case 'RAISE': {
       // Cannot raise if there's no current bet

@@ -293,14 +293,20 @@ describe('Table - Blind/Ante/Straddle Posting', () => {
       if (isOk(result)) {
         const state = result.value;
 
-        // Each player should have posted ante + blinds
+        // Antes are dead money: only live blinds belong in street committed.
         const totalCommitted = state.players.reduce(
           (sum, p) => sum + p.committed,
           0n
         );
+        expect(totalCommitted).toBe(
+          anteConfig.smallBlind + anteConfig.bigBlind
+        );
+
+        // The visible pot still includes all antes plus the live blinds.
+        const totalPot = state.pots.reduce((sum, pot) => sum + pot.total, 0n);
         const expectedTotal =
           anteConfig.ante! * 3n + anteConfig.smallBlind + anteConfig.bigBlind;
-        expect(totalCommitted).toBe(expectedTotal);
+        expect(totalPot).toBe(expectedTotal);
       }
     });
 
@@ -507,11 +513,17 @@ describe('Table - Blind/Ante/Straddle Posting', () => {
       if (isOk(result)) {
         const state = result.value;
 
-        // Player 3 should be all-in for ante
+        // Player 3 should be all-in from the ante. Ante chips are dead money,
+        // so they are in the pot but not in the live street commitment.
         const shortStack = state.players.find((p) => p.id === player3);
-        expect(shortStack?.committed).toBe(chips(3));
+        expect(shortStack?.committed).toBe(0n);
         expect(shortStack?.stack).toBe(0n);
         expect(shortStack?.status).toBe(PlayerStatus.AllIn);
+
+        const totalPot = state.pots.reduce((sum, pot) => sum + pot.total, 0n);
+        expect(totalPot).toBe(
+          anteConfig.ante! * 2n + chips(3) + anteConfig.smallBlind
+        );
       }
     });
 

@@ -25,7 +25,10 @@ export { Table, createTable, RebuyOptions } from './table/index.js';
 export {
   PlayerAction,
   PlayerActionType,
+  StartBettingRoundOptions,
   getAvailableActions,
+  getCallAmount,
+  getMinimumRaiseSize,
   validateAction,
   startBettingRound,
   applyActionToBettingRound,
@@ -48,4 +51,5 @@ export {
   handHistoryToJSON,
   handHistoryFromJSON,
   createHandHistory,
+  replayHand,
 } from './history/index.js';

@@ -368,7 +368,7 @@ describe('Hand Replay', () => {
       const states = replayHand(history, config);
 
       const finalState = states[1];
-      expect(finalState.phase).toBe(TablePhase.Idle);
+      expect(finalState.phase).toBe(TablePhase.Showdown);
       expect(finalState.players[0].stack).toBe(999n);
       expect(finalState.players[1].stack).toBe(1001n);
       expect(finalState.communityCards).toHaveLength(0);
@@ -610,8 +610,8 @@ describe('Hand Replay', () => {
       const states = replayHand(history, config);
 
       const afterRaise = states[2];
-      expect(afterRaise.players[0].committed).toBe(7n); // 1 (SB) + 6 (raise)
-      expect(afterRaise.players[0].stack).toBe(993n);
+      expect(afterRaise.players[0].committed).toBe(8n); // 1 call + 6 raise over the 2 BB
+      expect(afterRaise.players[0].stack).toBe(992n);
     });
 
     it('should handle all-in action', () => {
@@ -729,8 +729,8 @@ describe('Hand Replay', () => {
       const states = replayHand(history, config);
 
       const afterBlinds = states[1];
-      expect(afterBlinds.players[0].committed).toBe(6n); // 5 (ante) + 1 (SB)
-      expect(afterBlinds.players[1].committed).toBe(7n); // 5 (ante) + 2 (BB)
+      expect(afterBlinds.players[0].committed).toBe(1n); // ante is dead money
+      expect(afterBlinds.players[1].committed).toBe(2n); // ante is dead money
       expect(afterBlinds.pots[0].total).toBe(13n);
     });
 

@@ -4,6 +4,7 @@
 
 import { ChipAmount } from './money.js';
 import { Card } from './card.js';
+import type { EvaluatedHand } from '../hand-eval/types.js';
 
 /**
  * Branded type for player ID to prevent mixing with other strings
@@ -199,6 +200,35 @@ export interface BettingRoundState {
 
   /** Players who have acted since the latest full aggressive action. */
   actedPlayerIds: PlayerId[];
+
+  /** Minimum full opening bet for this street (normally the big blind). */
+  minimumBet?: ChipAmount;
+
+  /** Bet level each player was facing after their most recent action. */
+  actedAtBet?: Array<{ playerId: PlayerId; bet: ChipAmount }>;
+}
+
+/** Result for one settled pot in a completed hand. */
+export interface SettledPotResult {
+  potIndex: number;
+  total: ChipAmount;
+  winnerIds: PlayerId[];
+  payouts: Array<{ playerId: PlayerId; amount: ChipAmount }>;
+  rake: ChipAmount;
+  winningHand?: EvaluatedHand;
+}
+
+/** Public result of the most recently completed hand. */
+export interface HandResult {
+  handId: number;
+  reason: 'fold' | 'showdown';
+  finalBoard: Card[];
+  revealedPlayers: Array<{
+    playerId: PlayerId;
+    holeCards: [Card, Card];
+  }>;
+  pots: SettledPotResult[];
+  totalRake: ChipAmount;
 }
 
 /**
@@ -252,6 +282,9 @@ export interface TableState {
    * for live hands.
    */
   bettingRound?: BettingRoundState;
+
+  /** Result of the most recently completed hand, if any. */
+  lastHandResult?: HandResult;
 }
 
 /**

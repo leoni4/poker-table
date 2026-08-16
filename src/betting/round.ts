@@ -69,6 +69,10 @@ function getPlayersInHand(tableState: TableState): TableState['players'] {
  * Gets the current highest commitment in the betting round.
  */
 function getCurrentBet(tableState: TableState): ChipAmount {
+  if (tableState.bettingRound?.street === tableState.phase) {
+    return tableState.bettingRound.currentBet;
+  }
+
   if (tableState.players.length === 0) {
     return 0n;
   }
@@ -86,14 +90,27 @@ function getCurrentBet(tableState: TableState): ChipAmount {
  * construct TableState manually. Live Table hands initialize the state
  * explicitly at the start of every street.
  */
-function createRoundState(tableState: TableState): BettingRoundState {
-  const currentBet = getCurrentBet(tableState);
+export interface StartBettingRoundOptions {
+  currentBet?: ChipAmount;
+  lastRaiseSize?: ChipAmount;
+  minimumBet?: ChipAmount;
+}
+
+function createRoundState(
+  tableState: TableState,
+  options: StartBettingRoundOptions = {}
+): BettingRoundState {
+  const currentBet = options.currentBet ?? getCurrentBet(tableState);
 
   return {
     street: tableState.phase,
     currentBet,
-    lastRaiseSize: currentBet,
+    lastRaiseSize:
+      options.lastRaiseSize ??
+      (currentBet > 0n ? currentBet : (options.minimumBet ?? 0n)),
+    minimumBet: options.minimumBet,
     actedPlayerIds: [],
+    actedAtBet: [],
   };
 }
 
@@ -115,6 +132,21 @@ function addActedPlayer(
   if (!bettingRound.actedPlayerIds.includes(playerId)) {
     bettingRound.actedPlayerIds.push(playerId);
   }
+}
+
+function recordActionAtBet(
+  bettingRound: BettingRoundState,
+  playerId: PlayerId,
+  bet: ChipAmount
+): void {
+  const actedAtBet = bettingRound.actedAtBet ?? [];
+  const existing = actedAtBet.find((entry) => entry.playerId === playerId);
+  if (existing) {
+    existing.bet = bet;
+  } else {
+    actedAtBet.push({ playerId, bet });
+  }
+  bettingRound.actedAtBet = actedAtBet;
 }
 
 /**
@@ -173,7 +205,8 @@ function haveAllPlayersActed(tableState: TableState): boolean {
  */
 export function startBettingRound(
   tableState: TableState,
-  startingPlayerId: PlayerId
+  startingPlayerId: PlayerId,
+  options: StartBettingRoundOptions = {}
 ): Result<TableState, PokerError> {
   const startingPlayer = tableState.players.find(
     (p) => p.id === startingPlayerId
@@ -200,7 +233,7 @@ export function startBettingRound(
     );
   }
 
-  const bettingRound = createRoundState(tableState);
+  const bettingRound = createRoundState(tableState, options);
 
   return ok({
     ...tableState,
@@ -245,6 +278,7 @@ export function applyActionToBettingRound(
     ? {
         ...existingRoundState,
         actedPlayerIds: [...existingRoundState.actedPlayerIds],
+        actedAtBet: existingRoundState.actedAtBet?.map((entry) => ({ ...entry })),
       }
     : createRoundState(tableState);
 
@@ -261,10 +295,12 @@ export function applyActionToBettingRound(
     case 'FOLD':
       newPlayer.status = PlayerStatus.Folded;
       addActedPlayer(bettingRound, playerId);
+      recordActionAtBet(bettingRound, playerId, currentBet);
       break;
 
     case 'CHECK':
       addActedPlayer(bettingRound, playerId);
+      recordActionAtBet(bettingRound, playerId, currentBet);
       break;
 
     case 'CALL': {
@@ -280,6 +316,7 @@ export function applyActionToBettingRound(
       }
 
       addActedPlayer(bettingRound, playerId);
+      recordActionAtBet(bettingRound, playerId, currentBet);
       break;
     }
 
@@ -301,6 +338,7 @@ export function applyActionToBettingRound(
       bettingRound.lastRaiseSize = action.amount;
       bettingRound.lastAggressorId = playerId;
       bettingRound.actedPlayerIds = [playerId];
+      recordActionAtBet(bettingRound, playerId, bettingRound.currentBet);
       break;
     }
 
@@ -328,6 +366,7 @@ export function applyActionToBettingRound(
       bettingRound.lastRaiseSize = action.amount;
       bettingRound.lastAggressorId = playerId;
       bettingRound.actedPlayerIds = [playerId];
+      recordActionAtBet(bettingRound, playerId, bettingRound.currentBet);
       break;
     }
 
@@ -340,25 +379,27 @@ export function applyActionToBettingRound(
       if (newPlayer.committed > currentBet) {
         const raiseSize = newPlayer.committed - currentBet;
         const isOpeningBet = currentBet === 0n;
-        const isFullRaise =
-          isOpeningBet ||
-          bettingRound.lastRaiseSize === 0n ||
-          raiseSize >= bettingRound.lastRaiseSize;
+        const minimumBet = bettingRound.minimumBet ?? 0n;
+        const isFullRaise = isOpeningBet
+          ? minimumBet === 0n || newPlayer.committed >= minimumBet
+          : bettingRound.lastRaiseSize === 0n ||
+            raiseSize >= bettingRound.lastRaiseSize;
 
         bettingRound.currentBet = newPlayer.committed;
 
         if (isFullRaise) {
-          bettingRound.lastRaiseSize = raiseSize;
+          bettingRound.lastRaiseSize = isOpeningBet
+            ? newPlayer.committed
+            : raiseSize;
           bettingRound.lastAggressorId = playerId;
           bettingRound.actedPlayerIds = [playerId];
         } else {
-          // A short all-in raise changes the price to call, but does not count
-          // as a full raise for minimum-raise/reopening purposes.
           addActedPlayer(bettingRound, playerId);
         }
+        recordActionAtBet(bettingRound, playerId, bettingRound.currentBet);
       } else {
-        // Short all-in call or exact all-in call.
         addActedPlayer(bettingRound, playerId);
+        recordActionAtBet(bettingRound, playerId, currentBet);
       }
 
       break;

@@ -378,3 +378,109 @@ describe('explicit betting-round state', () => {
     ]);
   });
 });
+
+describe('short all-in and reopening rules', () => {
+  it('requires ALL_IN for an opening wager below the minimum bet', () => {
+    const p1 = createPlayerId('short');
+    const p2 = createPlayerId('deep');
+    const initial = state(
+      [player(p1, 0, 1n), player(p2, 1, 100n)],
+      p1
+    );
+    const started = startBettingRound(initial, p1, {
+      currentBet: 0n,
+      lastRaiseSize: 2n,
+      minimumBet: 2n,
+    });
+    expect(isOk(started)).toBe(true);
+    if (!isOk(started)) return;
+
+    expect(getAvailableActions(started.value, p1)).toEqual([
+      'FOLD',
+      'CHECK',
+      'ALL_IN',
+    ]);
+    expect(
+      isErr(validateAction(started.value, p1, { type: 'BET', amount: 1n }))
+    ).toBe(true);
+
+    const shortAllIn = applyActionToBettingRound(started.value, p1, {
+      type: 'ALL_IN',
+    });
+    expect(isOk(shortAllIn)).toBe(true);
+    if (!isOk(shortAllIn)) return;
+
+    expect(shortAllIn.value.bettingRound?.currentBet).toBe(1n);
+    expect(shortAllIn.value.bettingRound?.lastRaiseSize).toBe(2n);
+    expect(
+      isErr(
+        validateAction(shortAllIn.value, p2, { type: 'RAISE', amount: 1n })
+      )
+    ).toBe(true);
+    expect(
+      isOk(
+        validateAction(shortAllIn.value, p2, { type: 'RAISE', amount: 2n })
+      )
+    ).toBe(true);
+  });
+
+  it('reopens raising after cumulative short all-ins reach a full raise', () => {
+    const a = createPlayerId('a');
+    const b = createPlayerId('b');
+    const c = createPlayerId('c');
+    const d = createPlayerId('d');
+    const e = createPlayerId('e');
+    const initial = state(
+      [
+        player(a, 0, 1000n),
+        player(b, 1, 125n),
+        player(c, 2, 1000n),
+        player(d, 3, 200n),
+        player(e, 4, 1000n),
+      ],
+      a
+    );
+    const started = startBettingRound(initial, a, {
+      currentBet: 0n,
+      lastRaiseSize: 100n,
+      minimumBet: 100n,
+    });
+    expect(isOk(started)).toBe(true);
+    if (!isOk(started)) return;
+
+    let current = started.value;
+    const actions: Array<[PlayerId, { type: 'BET' | 'CALL' | 'ALL_IN'; amount?: bigint }]> = [
+      [a, { type: 'BET', amount: 100n }],
+      [b, { type: 'ALL_IN' }],
+      [c, { type: 'CALL' }],
+      [d, { type: 'ALL_IN' }],
+      [e, { type: 'CALL' }],
+    ];
+
+    for (const [playerId, action] of actions) {
+      const result = applyActionToBettingRound(current, playerId, action);
+      expect(isOk(result)).toBe(true);
+      if (!isOk(result)) return;
+      current = result.value;
+    }
+
+    expect(current.currentPlayerId).toBe(a);
+    expect(current.bettingRound?.currentBet).toBe(200n);
+    expect(current.bettingRound?.lastRaiseSize).toBe(100n);
+    expect(getAvailableActions(current, a)).toContain('RAISE');
+    expect(
+      isOk(validateAction(current, a, { type: 'RAISE', amount: 100n }))
+    ).toBe(true);
+
+    const aCalls = applyActionToBettingRound(current, a, { type: 'CALL' });
+    expect(isOk(aCalls)).toBe(true);
+    if (!isOk(aCalls)) return;
+    current = aCalls.value;
+
+    expect(current.currentPlayerId).toBe(c);
+    expect(getAvailableActions(current, c)).not.toContain('RAISE');
+    expect(
+      isErr(validateAction(current, c, { type: 'RAISE', amount: 100n }))
+    ).toBe(true);
+  });
+});

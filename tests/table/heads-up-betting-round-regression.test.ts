@@ -97,11 +97,13 @@ describe('heads-up betting-round regression', () => {
     expect(dealer.committed).toBe(1n);
     expect(bigBlind.committed).toBe(2n);
     expect(state.currentPlayerId).toBe(dealer.id);
-    expect(state.bettingRound).toEqual({
+    expect(state.bettingRound).toMatchObject({
       street: TablePhase.Preflop,
       currentBet: 2n,
       lastRaiseSize: 2n,
+      minimumBet: 2n,
       actedPlayerIds: [],
+      actedAtBet: [],
     });
   });
 
