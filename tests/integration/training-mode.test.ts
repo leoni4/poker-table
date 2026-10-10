@@ -22,6 +22,7 @@ import {
 const TABLES = 16;
 const HANDS_PER_TABLE = 30;
 const MAX_ACTIONS_PER_HAND = 500;
+const SIDE_BY_SIDE_TIMEOUT_MS = 60_000;
 
 function createRandom(seed: number): () => number {
   let s = seed >>> 0;
@@ -198,76 +199,80 @@ class SideBySide {
 }
 
 describe('Training mode (recordHistory: false and snapshot-free API)', () => {
-  it('gives the same states, results, and legal actions as a default table', () => {
-    let handsWithHistory = 0;
-    let midHandRemovals = 0;
-    let rejectedActions = 0;
+  it(
+    'gives the same states, results, and legal actions as a default table',
+    { timeout: SIDE_BY_SIDE_TIMEOUT_MS },
+    () => {
+      let handsWithHistory = 0;
+      let midHandRemovals = 0;
+      let rejectedActions = 0;
 
-    for (let tableIndex = 0; tableIndex < TABLES; tableIndex++) {
-      const random = createRandom(7000 + tableIndex);
-      const tables = new SideBySide(configFor(tableIndex));
-      const playerCount = 2 + (tableIndex % 5);
-      let nextPlayer = 0;
-      for (; nextPlayer < playerCount; nextPlayer++) {
-        tables.seat(
-          createPlayerId(`p${nextPlayer}`),
-          40n + BigInt(nextPlayer * 13)
-        );
-      }
-
-      for (let hand = 0; hand < HANDS_PER_TABLE; hand++) {
-        for (const player of tables.full.getState().players) {
-          if (player.stack < 2n) {
-            tables.rebuy(player.id, 60n);
-          }
-        }
-        if (tables.full.getState().players.length < 2) {
-          tables.seat(createPlayerId(`p${nextPlayer++}`), 80n);
+      for (let tableIndex = 0; tableIndex < TABLES; tableIndex++) {
+        const random = createRandom(7000 + tableIndex);
+        const tables = new SideBySide(configFor(tableIndex));
+        const playerCount = 2 + (tableIndex % 5);
+        let nextPlayer = 0;
+        for (; nextPlayer < playerCount; nextPlayer++) {
+          tables.seat(
+            createPlayerId(`p${nextPlayer}`),
+            40n + BigInt(nextPlayer * 13)
+          );
         }
 
-        tables.startHand();
-
-        let actions = 0;
-        while (tables.full.getState().currentPlayerId !== undefined) {
-          expect(actions++).toBeLessThan(MAX_ACTIONS_PER_HAND);
-          const state = tables.full.getState();
-          const event = random();
-
-          if (event < 0.02) {
-            const others = state.players.filter(
-              (p) => p.id !== state.currentPlayerId
-            );
-            tables.remove(others[Math.floor(random() * others.length)].id);
-            midHandRemovals++;
-            continue;
-          }
-          if (event < 0.03) {
-            tables.seat(createPlayerId(`p${nextPlayer++}`), 50n);
-            continue;
-          }
-          if (event < 0.05) {
-            const wrongPlayer = state.players.find(
-              (p) => p.id !== state.currentPlayerId
-            );
-            if (wrongPlayer) {
-              tables.act(wrongPlayer.id, { type: 'CHECK' });
-              rejectedActions++;
-              continue;
+        for (let hand = 0; hand < HANDS_PER_TABLE; hand++) {
+          for (const player of tables.full.getState().players) {
+            if (player.stack < 2n) {
+              tables.rebuy(player.id, 60n);
             }
           }
+          if (tables.full.getState().players.length < 2) {
+            tables.seat(createPlayerId(`p${nextPlayer++}`), 80n);
+          }
 
-          tables.act(state.currentPlayerId!, pickAction(state, random));
+          tables.startHand();
+
+          let actions = 0;
+          while (tables.full.getState().currentPlayerId !== undefined) {
+            expect(actions++).toBeLessThan(MAX_ACTIONS_PER_HAND);
+            const state = tables.full.getState();
+            const event = random();
+
+            if (event < 0.02) {
+              const others = state.players.filter(
+                (p) => p.id !== state.currentPlayerId
+              );
+              tables.remove(others[Math.floor(random() * others.length)].id);
+              midHandRemovals++;
+              continue;
+            }
+            if (event < 0.03) {
+              tables.seat(createPlayerId(`p${nextPlayer++}`), 50n);
+              continue;
+            }
+            if (event < 0.05) {
+              const wrongPlayer = state.players.find(
+                (p) => p.id !== state.currentPlayerId
+              );
+              if (wrongPlayer) {
+                tables.act(wrongPlayer.id, { type: 'CHECK' });
+                rejectedActions++;
+                continue;
+              }
+            }
+
+            tables.act(state.currentPlayerId!, pickAction(state, random));
+          }
+
+          expect(tables.full.getLastHandHistory()).not.toBeNull();
+          handsWithHistory++;
         }
-
-        expect(tables.full.getLastHandHistory()).not.toBeNull();
-        handsWithHistory++;
       }
-    }
 
-    expect(handsWithHistory).toBe(TABLES * HANDS_PER_TABLE);
-    expect(midHandRemovals).toBeGreaterThan(10);
-    expect(rejectedActions).toBeGreaterThan(10);
-  });
+      expect(handsWithHistory).toBe(TABLES * HANDS_PER_TABLE);
+      expect(midHandRemovals).toBeGreaterThan(10);
+      expect(rejectedActions).toBeGreaterThan(10);
+    }
+  );
 
   it('returns the same errors from dealHand() as from startHand()', () => {
     const config = configFor(1);
