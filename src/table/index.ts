@@ -1125,56 +1125,54 @@ export class Table {
     });
   }
 
+  private getPlayerStatus(playerId: PlayerId): PlayerStatus | undefined {
+    for (const player of this.state.players) {
+      if (player.id === playerId) {
+        return player.status;
+      }
+    }
+    return undefined;
+  }
+
   /**
    * Rebuild visible pots from cumulative hand contributions.
    */
   private refreshPots(): void {
+    let total = 0n;
+    let hasAllInContribution = false;
     const contributions: PlayerContribution[] = [];
-
+    const eligibleContributors: PlayerId[] = [];
     for (const [playerId, amount] of this.handContributions) {
       if (amount <= 0n) {
         continue;
       }
 
-      const player = this.state.players.find((p) => p.id === playerId);
-      contributions.push({
-        playerId,
-        amount,
-        isAllIn: player?.status === PlayerStatus.AllIn,
-      });
+      const status = this.getPlayerStatus(playerId);
+      const isAllIn = status === PlayerStatus.AllIn;
+      total += amount;
+      if (isAllIn) {
+        hasAllInContribution = true;
+      }
+      contributions.push({ playerId, amount, isAllIn });
+      if (isAllIn || status === PlayerStatus.Active) {
+        eligibleContributors.push(playerId);
+      }
     }
 
-    const eligiblePlayers = new Set(
-      this.state.players
-        .filter(
-          (p) =>
-            p.status === PlayerStatus.Active || p.status === PlayerStatus.AllIn
-        )
-        .map((p) => p.id)
-    );
-
-    const hasAllInContribution = contributions.some(
-      (contribution) => contribution.isAllIn
-    );
-
     if (!hasAllInContribution) {
-      const total = contributions.reduce(
-        (sum, contribution) => sum + contribution.amount,
-        0n
-      );
-
       this.state.pots =
-        total > 0n
-          ? [
-              {
-                total,
-                participants: contributions
-                  .map((contribution) => contribution.playerId)
-                  .filter((id) => eligiblePlayers.has(id)),
-              },
-            ]
-          : [];
+        total > 0n ? [{ total, participants: eligibleContributors }] : [];
       return;
+    }
+
+    const eligiblePlayers = new Set<PlayerId>();
+    for (const player of this.state.players) {
+      if (
+        player.status === PlayerStatus.Active ||
+        player.status === PlayerStatus.AllIn
+      ) {
+        eligiblePlayers.add(player.id);
+      }
     }
 
     const pots: PotState[] = [];
