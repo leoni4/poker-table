@@ -3,7 +3,7 @@
  */
 
 import { TableConfig } from '../core/table.js';
-import { HandEvent } from './events.js';
+import { ActionTakenEvent, BlindsPostedEvent, HandEvent } from './events.js';
 import { Card, cardToString, parseCard } from '../core/card.js';
 import { ChipAmount } from '../core/money.js';
 import { PlayerId, TablePhase } from '../core/table.js';
@@ -604,6 +604,195 @@ export function handHistoryFromJSON(json: string): HandHistory {
     events: serialized.events.map(deserializeEvent),
     startTime: serialized.startTime,
     endTime: serialized.endTime,
+  };
+}
+
+/**
+ * Copy a number as a JSON round trip returns it (NaN / Infinity → null, -0 → 0)
+ */
+function toJsonNumber<T extends number | undefined>(value: T): T {
+  if (value === undefined) {
+    return value;
+  }
+  if (value === 0) {
+    return 0 as T;
+  }
+  return (Number.isFinite(value) ? value : null) as T;
+}
+
+/**
+ * Copy table config with the shape of deserializeTableConfig
+ */
+function cloneTableConfig(config: TableConfig): TableConfig {
+  return {
+    minPlayers: toJsonNumber(config.minPlayers),
+    maxPlayers: toJsonNumber(config.maxPlayers),
+    smallBlind: config.smallBlind,
+    bigBlind: config.bigBlind,
+    ante: config.ante ? config.ante : undefined,
+    straddle: config.straddle ? config.straddle : undefined,
+    rake: config.rake
+      ? {
+          percentage: toJsonNumber(config.rake.percentage),
+          cap: config.rake.cap,
+        }
+      : undefined,
+    rngSeed: toJsonNumber(config.rngSeed),
+  };
+}
+
+/**
+ * Copy a single event with the shape of deserializeEvent
+ */
+function cloneEvent(event: HandEvent): HandEvent {
+  const timestamp = toJsonNumber(event.timestamp);
+
+  switch (event.type) {
+    case 'HAND_STARTED':
+      return {
+        timestamp,
+        type: 'HAND_STARTED',
+        handId: toJsonNumber(event.handId),
+        dealerSeat: toJsonNumber(event.dealerSeat),
+        players: event.players.map((p) => ({
+          id: p.id,
+          seat: toJsonNumber(p.seat),
+          stack: p.stack,
+        })),
+      };
+
+    case 'BLINDS_POSTED': {
+      const cloned: BlindsPostedEvent = {
+        timestamp,
+        type: 'BLINDS_POSTED',
+      };
+      if (event.smallBlind) {
+        cloned.smallBlind = {
+          playerId: event.smallBlind.playerId,
+          amount: event.smallBlind.amount,
+        };
+      }
+      if (event.bigBlind) {
+        cloned.bigBlind = {
+          playerId: event.bigBlind.playerId,
+          amount: event.bigBlind.amount,
+        };
+      }
+      if (event.straddle) {
+        cloned.straddle = {
+          playerId: event.straddle.playerId,
+          amount: event.straddle.amount,
+        };
+      }
+      if (event.antes) {
+        cloned.antes = event.antes.map((a) => ({
+          playerId: a.playerId,
+          amount: a.amount,
+        }));
+      }
+      return cloned;
+    }
+
+    case 'CARDS_DEALT':
+      return {
+        timestamp,
+        type: 'CARDS_DEALT',
+        players: event.players.map((p) => ({
+          playerId: p.playerId,
+          cards: [p.cards[0], p.cards[1]],
+        })),
+      };
+
+    case 'ACTION_TAKEN': {
+      const cloned: ActionTakenEvent = {
+        timestamp,
+        type: 'ACTION_TAKEN',
+        playerId: event.playerId,
+        action: event.action,
+      };
+      if (event.amount !== undefined) {
+        cloned.amount = event.amount;
+      }
+      if (event.committedAfter !== undefined) {
+        cloned.committedAfter = event.committedAfter;
+      }
+      if (event.allIn !== undefined) {
+        cloned.allIn = event.allIn;
+      }
+      if (event.outOfTurn !== undefined) {
+        cloned.outOfTurn = event.outOfTurn;
+      }
+      return cloned;
+    }
+
+    case 'STREET_ENDED':
+      return {
+        timestamp,
+        type: 'STREET_ENDED',
+        street: event.street,
+        communityCards: event.communityCards.slice(),
+        potTotal: event.potTotal,
+      };
+
+    case 'UNCALLED_BET_RETURNED':
+      return {
+        timestamp,
+        type: 'UNCALLED_BET_RETURNED',
+        playerId: event.playerId,
+        amount: event.amount,
+      };
+
+    case 'SHOWDOWN':
+      return {
+        timestamp,
+        type: 'SHOWDOWN',
+        players: event.players.map((p) => ({
+          playerId: p.playerId,
+          cards: p.cards ? [p.cards[0], p.cards[1]] : undefined,
+          mucked: p.mucked,
+        })),
+      };
+
+    case 'POT_DISTRIBUTED':
+      return {
+        timestamp,
+        type: 'POT_DISTRIBUTED',
+        pots: event.pots.map((pot) => ({
+          amount: pot.amount,
+          rake: pot.rake,
+          winners: pot.winners.map((w) => ({
+            playerId: w.playerId,
+            share: w.share,
+          })),
+        })),
+      };
+
+    case 'HAND_ENDED':
+      return {
+        timestamp,
+        type: 'HAND_ENDED',
+        handId: toJsonNumber(event.handId),
+        winnersByFold: event.winnersByFold,
+        finalPlayers: event.finalPlayers.map((p) => ({
+          id: p.id,
+          finalStack: p.finalStack,
+        })),
+      };
+  }
+}
+
+/**
+ * Deep copy of a HandHistory, equal to
+ * handHistoryFromJSON(handHistoryToJSON(history)) without the JSON text.
+ * Keep it in sync with the serializers when events or fields change.
+ */
+export function cloneHandHistory(history: HandHistory): HandHistory {
+  return {
+    handId: toJsonNumber(history.handId),
+    tableConfig: cloneTableConfig(history.tableConfig),
+    events: history.events.map(cloneEvent),
+    startTime: toJsonNumber(history.startTime),
+    endTime: toJsonNumber(history.endTime),
   };
 }
 

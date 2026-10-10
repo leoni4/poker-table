@@ -25,9 +25,8 @@ import {
 import {
   HandEvent,
   HandHistory,
+  cloneHandHistory,
   createHandHistory,
-  handHistoryFromJSON,
-  handHistoryToJSON,
 } from '../history/index.js';
 import {
   PlayerContribution,
@@ -1491,7 +1490,7 @@ export class Table {
   }
 
   private cloneHistory(history: HandHistory): HandHistory {
-    return handHistoryFromJSON(handHistoryToJSON(history));
+    return cloneHandHistory(history);
   }
 
   private cloneHandResult(result: HandResult): HandResult {
