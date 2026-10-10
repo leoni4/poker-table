@@ -110,8 +110,10 @@ export class HoldemTable {
   /**
    * Removes a player from the table
    *
-   * If called during an active hand, the player will be set to sitting out
-   * instead of being removed (unless they have no committed chips).
+   * If called during an active hand, the player is not removed and becomes
+   * sitting out. An active player folds at once, also out of turn; the fold
+   * can end the betting round or the hand. An all-in player stays in the hand
+   * and becomes sitting out when the hand ends.
    *
    * @param playerId - Unique identifier for the player to remove
    * @returns Result with updated table state or error

@@ -71,13 +71,11 @@ describe('Table - Seat Management', () => {
     });
 
     it('should reject seating when table is full', () => {
-      // Seat max players
       for (let i = 0; i < config.maxPlayers; i++) {
         const playerId = createPlayerId(`player-${i}`);
         table.seatPlayer(playerId, chips(1000));
       }
 
-      // Try to seat one more
       const extraPlayer = createPlayerId('extra-player');
       const result = table.seatPlayer(extraPlayer, chips(1000));
 
@@ -146,14 +144,14 @@ describe('Table - Seat Management', () => {
 
       table.seatPlayer(player1, chips(1000));
       table.seatPlayer(player2, chips(1000));
-      table.removePlayer(player1); // Remove seat 0
+      table.removePlayer(player1);
 
       const result = table.seatPlayer(player3, chips(1000));
 
       expect(isOk(result)).toBe(true);
       if (isOk(result)) {
         const newPlayer = result.value.players.find((p) => p.id === player3);
-        expect(newPlayer?.seat).toBe(0); // Should take the vacant seat 0
+        expect(newPlayer?.seat).toBe(0);
       }
     });
   });
@@ -210,7 +208,6 @@ describe('Table - Seat Management', () => {
       table.seatPlayer(player1, chips(1000));
       table.seatPlayer(player2, chips(1000));
 
-      // Simulate active hand by changing phase
       table.setPhase(TablePhase.Preflop);
 
       const result = table.removePlayer(player1);
@@ -224,20 +221,20 @@ describe('Table - Seat Management', () => {
       }
     });
 
-    it('should reject removing player with committed chips during active hand', () => {
+    it('should fold and sit out a player with committed chips during active hand', () => {
       const player1 = createPlayerId('player-1');
       table.seatPlayer(player1, chips(1000));
 
-      // Simulate active hand with committed chips
       table.setPhase(TablePhase.Preflop);
       table.setPlayerCommitted(player1, chips(50));
 
       const result = table.removePlayer(player1);
 
-      expect(isErr(result)).toBe(true);
-      if (isErr(result)) {
-        expect(result.error.code).toBe(ErrorCode.INVALID_STATE);
-        expect(result.error.message).toContain('committed chips');
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        const player = result.value.players.find((p) => p.id === player1);
+        expect(player?.status).toBe(PlayerStatus.SittingOut);
+        expect(player?.committed).toBe(chips(50));
       }
     });
 
@@ -300,7 +297,6 @@ describe('Table - Seat Management', () => {
       const playerId = createPlayerId('player-1');
       table.seatPlayer(playerId, chips(1000));
 
-      // Simulate active hand
       table.setPhase(TablePhase.Flop);
 
       const result = table.rebuyPlayer(playerId, chips(1000));
@@ -323,7 +319,6 @@ describe('Table - Seat Management', () => {
 
       tableWithRebuy.seatPlayer(playerId, chips(1000));
 
-      // Simulate active hand
       tableWithRebuy.setPhase(TablePhase.Turn);
 
       const result = tableWithRebuy.rebuyPlayer(playerId, chips(500));
@@ -389,7 +384,6 @@ describe('Table - Seat Management', () => {
       const playerId = createPlayerId('player-1');
       table.seatPlayer(playerId, chips(1000));
 
-      // Set player to sitting out
       table.setPlayerStatus(playerId, PlayerStatus.SittingOut);
 
       const result = table.rebuyPlayer(playerId, chips(500));
@@ -424,24 +418,20 @@ describe('Table - Seat Management', () => {
       const player1 = createPlayerId('player-1');
       const player2 = createPlayerId('player-2');
 
-      // Initial state
       let state = table.getState();
       expect(state.phase).toBe(TablePhase.Idle);
       expect(state.handId).toBe(0);
       expect(state.players).toHaveLength(0);
 
-      // After seating players
       table.seatPlayer(player1, chips(1000));
       table.seatPlayer(player2, chips(2000));
       state = table.getState();
       expect(state.players).toHaveLength(2);
 
-      // After rebuy
       table.rebuyPlayer(player1, chips(500));
       state = table.getState();
       expect(state.players[0].stack).toBe(chips(1500));
 
-      // After removal
       table.removePlayer(player2);
       state = table.getState();
       expect(state.players).toHaveLength(1);
@@ -454,7 +444,6 @@ describe('Table - Seat Management', () => {
       const state1 = table.getState();
       const state2 = table.getState();
 
-      // Modifying state1 should not affect state2
       state1.players[0].stack = chips(5000);
       expect(state2.players[0].stack).toBe(chips(1000));
     });
@@ -463,19 +452,15 @@ describe('Table - Seat Management', () => {
       const player1 = createPlayerId('player-1');
       const player2 = createPlayerId('player-2');
 
-      // Seat player 1
       table.seatPlayer(player1, chips(1000));
       expect(table.getState().players).toHaveLength(1);
 
-      // Rebuy
       table.rebuyPlayer(player1, chips(500));
       expect(table.getState().players[0].stack).toBe(chips(1500));
 
-      // Remove
       table.removePlayer(player1);
       expect(table.getState().players).toHaveLength(0);
 
-      // Seat player 2 in the vacated seat
       const result = table.seatPlayer(player2, chips(2000));
       expect(isOk(result)).toBe(true);
       if (isOk(result)) {

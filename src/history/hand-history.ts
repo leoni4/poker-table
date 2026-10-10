@@ -133,6 +133,7 @@ interface SerializableActionTakenEvent extends SerializableBaseEvent {
   amount?: string;
   committedAfter?: string;
   allIn?: boolean;
+  outOfTurn?: boolean;
 }
 
 /**
@@ -338,6 +339,9 @@ function serializeEvent(event: HandEvent): SerializableHandEvent {
       if (event.allIn !== undefined) {
         serialized.allIn = event.allIn;
       }
+      if (event.outOfTurn !== undefined) {
+        serialized.outOfTurn = event.outOfTurn;
+      }
       return serialized;
     }
 
@@ -472,6 +476,7 @@ function deserializeEvent(serialized: SerializableHandEvent): HandEvent {
         amount?: ChipAmount;
         committedAfter?: ChipAmount;
         allIn?: boolean;
+        outOfTurn?: boolean;
       } = {
         ...base,
         type: 'ACTION_TAKEN',
@@ -486,6 +491,9 @@ function deserializeEvent(serialized: SerializableHandEvent): HandEvent {
       }
       if (serialized.allIn !== undefined) {
         event.allIn = serialized.allIn;
+      }
+      if (serialized.outOfTurn !== undefined) {
+        event.outOfTurn = serialized.outOfTurn;
       }
       return event;
     }

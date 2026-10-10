@@ -354,6 +354,10 @@ function applyActionTaken(
     }
   }
 
+  if (event.outOfTurn) {
+    return { ...state, players };
+  }
+
   const nextPlayer = findFirstActiveAfterSeat(players, actingSeat);
 
   return {

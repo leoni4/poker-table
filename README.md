@@ -160,6 +160,16 @@ if (isOk(result)) {
 
 A player seated during a hand is not dealt into that hand. Their status is `sitting-out` until the next `startHand()`, which deals them in.
 
+### Removing Players
+
+Between hands, `removePlayer(playerId)` removes the player from the table. During a hand, the player stays in `state.players` with status `sitting-out` until you call `removePlayer` again between hands:
+
+- An active player folds at once, also when it is not their turn. Chips they put in stay in the pot. If the fold ends the betting round, the returned state can be a later street or `showdown`.
+- An all-in player stays in the hand and keeps their claim to the pots. They become `sitting-out` when the hand ends.
+- A folded player becomes `sitting-out` at once.
+
+An out-of-turn fold is recorded in the hand history as `ACTION_TAKEN` with `action: 'FOLD'` and `outOfTurn: true`.
+
 ### Starting a Hand
 
 ```typescript

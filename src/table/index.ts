@@ -6,6 +6,7 @@ import {
   TablePhase,
   PlayerStatus,
   HandResult,
+  PotState,
   SettledPotResult,
 } from '../core/table.js';
 import { ChipAmount } from '../core/money.js';
@@ -71,6 +72,7 @@ export class Table {
   private handContributions = new Map<PlayerId, ChipAmount>();
   private lastBigBlindHandByPlayer = new Map<PlayerId, number>();
   private playersWaitingForNextHand = new Set<PlayerId>();
+  private playersLeavingAfterHand = new Set<PlayerId>();
 
   constructor(config: TableConfig, rebuyOptions: RebuyOptions = {}) {
     this.config = {
@@ -291,16 +293,6 @@ export class Table {
 
     // Check if player can be removed during active hand
     if (this.isHandInProgress()) {
-      // Player can only be removed if they have no committed chips and are sitting out
-      if (player.committed > 0n) {
-        return err(
-          createError(
-            ErrorCode.INVALID_STATE,
-            `Cannot remove player ${playerId} with committed chips during active hand`
-          )
-        );
-      }
-
       this.playersWaitingForNextHand.delete(playerId);
 
       // If the player is currently facing action, record an actual fold first
@@ -319,8 +311,15 @@ export class Table {
         return ok(this.getState());
       }
 
-      // A non-current zero-commitment player can leave the current hand by
-      // becoming sitting out; action selection already skips this status.
+      if (player.status === PlayerStatus.AllIn) {
+        this.playersLeavingAfterHand.add(playerId);
+        return ok(this.getState());
+      }
+
+      if (player.status === PlayerStatus.Active) {
+        return this.foldOutOfTurn(playerId);
+      }
+
       player.status = PlayerStatus.SittingOut;
       return ok(this.getState());
     }
@@ -328,6 +327,7 @@ export class Table {
     // Remove player from the table
     this.state.players.splice(playerIndex, 1);
     this.playersWaitingForNextHand.delete(playerId);
+    this.playersLeavingAfterHand.delete(playerId);
 
     // If current player was removed and it was their turn, clear current player
     if (this.state.currentPlayerId === playerId) {
@@ -834,6 +834,53 @@ export class Table {
       allIn: updatedPlayer?.status === PlayerStatus.AllIn || undefined,
     });
 
+    return this.resolveBettingRoundCompletion();
+  }
+
+  /**
+   * Fold a player who leaves the table while another player is to act
+   * @private
+   */
+  private foldOutOfTurn(playerId: PlayerId): Result<TableState, TableError> {
+    const player = this.state.players.find((p) => p.id === playerId);
+    if (!player) {
+      return err(
+        createError(
+          ErrorCode.PLAYER_NOT_FOUND,
+          `Player ${playerId} not found at the table`
+        )
+      );
+    }
+
+    player.status = PlayerStatus.Folded;
+    this.refreshPots();
+    this.appendHistoryEvent({
+      type: 'ACTION_TAKEN',
+      timestamp: Date.now(),
+      playerId,
+      action: 'FOLD',
+      committedAfter: player.committed,
+      outOfTurn: true,
+    });
+
+    const completionResult = this.resolveBettingRoundCompletion();
+    if (!completionResult.ok) {
+      return completionResult;
+    }
+
+    const foldedPlayer = this.state.players.find((p) => p.id === playerId);
+    if (foldedPlayer) {
+      foldedPlayer.status = PlayerStatus.SittingOut;
+    }
+    return ok(this.getState());
+  }
+
+  /**
+   * End the hand, run out the board, or advance the street when the betting
+   * round is complete
+   * @private
+   */
+  private resolveBettingRoundCompletion(): Result<TableState, TableError> {
     if (isBettingRoundComplete(this.state)) {
       const playersInHand = this.state.players.filter(
         (p) =>
@@ -1077,10 +1124,19 @@ export class Table {
       return;
     }
 
-    this.state.pots = constructPots(contributions).map((pot) => ({
-      ...pot,
-      participants: pot.participants.filter((id) => eligiblePlayers.has(id)),
-    }));
+    const pots: PotState[] = [];
+    for (const pot of constructPots(contributions)) {
+      const participants = pot.participants.filter((id) =>
+        eligiblePlayers.has(id)
+      );
+      const previousPot = pots[pots.length - 1];
+      if (participants.length === 0 && previousPot) {
+        previousPot.total += pot.total;
+        continue;
+      }
+      pots.push({ ...pot, participants });
+    }
+    this.state.pots = pots;
   }
 
   /**
@@ -1125,6 +1181,7 @@ export class Table {
     };
 
     this.appendPotDistributionEvent(settledPots);
+    this.sitOutPlayersLeavingAfterHand();
     this.completeHandHistory(true);
     return ok(undefined);
   }
@@ -1237,6 +1294,7 @@ export class Table {
     };
 
     this.appendPotDistributionEvent(settledPots);
+    this.sitOutPlayersLeavingAfterHand();
     this.completeHandHistory(false);
     return ok(undefined);
   }
@@ -1312,6 +1370,15 @@ export class Table {
       this.state.phase === TablePhase.Turn ||
       this.state.phase === TablePhase.River
     );
+  }
+
+  private sitOutPlayersLeavingAfterHand(): void {
+    for (const player of this.state.players) {
+      if (this.playersLeavingAfterHand.has(player.id)) {
+        player.status = PlayerStatus.SittingOut;
+      }
+    }
+    this.playersLeavingAfterHand.clear();
   }
 
   private recordContribution(playerId: PlayerId, amount: ChipAmount): void {

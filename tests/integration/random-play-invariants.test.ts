@@ -20,6 +20,7 @@ import {
 
 const TABLES = 40;
 const MID_HAND_JOIN_TABLES = 20;
+const MID_HAND_REMOVAL_TABLES = 20;
 const MID_HAND_EVENT_CHANCE = 0.03;
 const HANDS_PER_TABLE = 50;
 const MAX_ACTIONS_PER_HAND = 500;
@@ -83,7 +84,8 @@ function chipsInPlay(state: TableState): ChipAmount {
 
 function playTable(
   tableIndex: number,
-  midHandJoins = false
+  midHandJoins = false,
+  midHandRemovals = false
 ): { hands: number; actions: number } {
   const random = createRandom(0x5eed + tableIndex);
   const randomInt = (n: number): number => Math.floor(random() * n);
@@ -116,9 +118,28 @@ function playTable(
   let actions = 0;
   let lateJoinCount = 0;
   let waiting = new Set<string>();
+  let removed = new Set<string>();
+  let replacementCount = 0;
 
   for (let h = 0; h < HANDS_PER_TABLE; h++) {
     const where = `table ${tableIndex} hand ${h}`;
+
+    if (midHandRemovals) {
+      for (const id of removed) {
+        const p = table.getState().players.find((q) => q.id === id);
+        check(p !== undefined, `${where}: removed ${id} missing`);
+        const removal = table.removePlayer(p.id);
+        check(removal.ok, `${where}: remove ${id} between hands`);
+        bank -= p.stack;
+      }
+      removed = new Set<string>();
+      while (table.getState().players.length < 3) {
+        const amount = bb * BigInt(1 + randomInt(40));
+        const id = createPlayerId(`new${replacementCount++}`);
+        check(table.seatPlayer(id, amount).ok, `${where}: seat ${id}`);
+        bank += amount;
+      }
+    }
 
     for (const p of table.getState().players) {
       if (p.stack === 0n) {
@@ -172,9 +193,22 @@ function playTable(
         check(chipsInPlay(state) === bank, `${where}: chips after side event`);
       }
 
+      if (midHandRemovals && random() < MID_HAND_EVENT_CHANCE) {
+        const candidates = state.players.filter(
+          (p) => p.status !== PlayerStatus.SittingOut
+        );
+        const p = candidates[randomInt(candidates.length)];
+        const removal = table.removePlayer(p.id);
+        check(removal.ok, `${where}: mid-hand remove ${p.id}`);
+        removed.add(p.id);
+        state = removal.value;
+        continue;
+      }
+
       const current = state.currentPlayerId;
       check(current !== undefined, `${where}: no current player`);
       check(!waiting.has(current), `${where}: waiting ${current} acts`);
+      check(!removed.has(current), `${where}: removed ${current} acts`);
 
       const view = table.getStateForPlayer(current);
       for (const p of view.players) {
@@ -230,6 +264,13 @@ function playTable(
         `${where}: waiting ${id} joined the hand`
       );
     }
+    for (const id of removed) {
+      const p = state.players.find((q) => q.id === id);
+      check(
+        p?.status === PlayerStatus.SittingOut,
+        `${where}: removed ${id} not sitting out`
+      );
+    }
     const handResult = table.getLastHandResult();
     check(handResult !== null, `${where}: no hand result`);
     check(
@@ -269,6 +310,17 @@ describe('Random-play invariants (mid-hand seat and rebuy)', () => {
     'table %i keeps all invariants',
     (tableIndex) => {
       const { hands, actions } = playTable(tableIndex, true);
+      expect(hands).toBe(HANDS_PER_TABLE);
+      expect(actions).toBeGreaterThan(0);
+    }
+  );
+});
+
+describe('Random-play invariants (mid-hand removal)', () => {
+  it.each(Array.from({ length: MID_HAND_REMOVAL_TABLES }, (_, i) => i))(
+    'table %i keeps all invariants',
+    (tableIndex) => {
+      const { hands, actions } = playTable(tableIndex, false, true);
       expect(hands).toBe(HANDS_PER_TABLE);
       expect(actions).toBeGreaterThan(0);
     }

@@ -71,9 +71,9 @@ export interface ActionTakenEvent extends BaseEvent {
   playerId: PlayerId;
   action: PlayerActionType;
   amount?: ChipAmount;
-  /** Exact street commitment after the action; enables faithful replay. */
   committedAfter?: ChipAmount;
   allIn?: boolean;
+  outOfTurn?: boolean;
 }
 
 /**
