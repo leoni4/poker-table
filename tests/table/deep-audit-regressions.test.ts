@@ -11,6 +11,7 @@ import {
 import { PokerError } from '../../src/core/errors.js';
 import { Result, isOk } from '../../src/core/result.js';
 import { calculateRake } from '../../src/pot/index.js';
+import { getAvailableActions } from '../../src/betting/actions.js';
 import { replayHand } from '../../src/history/replay.js';
 import {
   handHistoryFromJSON,
@@ -271,6 +272,40 @@ describe('deep audit regressions', () => {
     const resultCard = result.finalBoard[0];
     result.finalBoard[0] = 999;
     expect(table.getLastHandResult()?.finalBoard[0]).toBe(resultCard);
+  });
+
+  it('returns an independent winningHand copy for each pot won by the same player', () => {
+    const table = createTable({ ...createDefaultTableConfig(), rngSeed: 1 });
+    seat(table, 'short', 50n);
+    const deep = seat(table, 'deep1', 100n);
+    seat(table, 'deep2', 100n);
+
+    let state = expectOk(table.startHand());
+    while (state.currentPlayerId !== undefined) {
+      const actorId = state.currentPlayerId;
+      const available = getAvailableActions(state, actorId);
+      state = expectOk(
+        table.applyAction(actorId, {
+          type: available.includes('ALL_IN') ? 'ALL_IN' : 'CALL',
+        })
+      );
+    }
+
+    const result = table.getLastHandResult()!;
+    expect(result.pots.map((pot) => pot.total)).toEqual([150n, 100n]);
+    expect(result.pots.map((pot) => pot.winnerIds)).toEqual([[deep], [deep]]);
+    const sidePotHand = structuredClone(result.pots[1].winningHand);
+    expect(result.pots[0].winningHand).toEqual(sidePotHand);
+
+    result.pots[0].winningHand!.primaryRanks.push(99);
+    result.pots[0].winningHand!.kickers.push(99);
+    result.pots[0].winningHand!.bestCards.push(99);
+
+    expect(result.pots[1].winningHand).toEqual(sidePotHand);
+    expect(table.getLastHandResult()!.pots[0].winningHand).toEqual(sidePotHand);
+    expect(table.getState().lastHandResult!.pots[1].winningHand).toEqual(
+      sidePotHand
+    );
   });
 
   it('provides a player-safe state projection without leaking opponent hole cards', () => {

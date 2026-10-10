@@ -36,7 +36,12 @@ import {
   distributePot,
   applyPayouts,
 } from '../pot/index.js';
-import { determineWinners, evaluateHand } from '../hand-eval/index.js';
+import {
+  ComparisonResult,
+  EvaluatedHand,
+  compareHands,
+  evaluateHand,
+} from '../hand-eval/index.js';
 
 export type TableError = PokerError;
 
@@ -1261,6 +1266,19 @@ export class Table {
       })),
     });
 
+    const evaluatedHands = new Map<PlayerId, EvaluatedHand>();
+    const getEvaluatedHand = (player: PlayerState): EvaluatedHand => {
+      let hand = evaluatedHands.get(player.id);
+      if (hand === undefined) {
+        hand = evaluateHand([
+          ...player.holeCards.cards!,
+          ...this.state.communityCards,
+        ]);
+        evaluatedHands.set(player.id, hand);
+      }
+      return hand;
+    };
+
     const allPayouts: Payout[] = [];
     const settledPots: SettledPotResult[] = [];
     let totalRake = 0n;
@@ -1279,30 +1297,19 @@ export class Table {
         continue;
       }
 
-      let winnerIds: PlayerId[];
-      let winningHand: SettledPotResult['winningHand'];
+      let winnerIds: PlayerId[] = [eligiblePlayers[0].id];
+      let winningHand = getEvaluatedHand(eligiblePlayers[0]);
 
-      if (eligiblePlayers.length === 1) {
-        winnerIds = [eligiblePlayers[0].id];
-        winningHand = evaluateHand([
-          ...eligiblePlayers[0].holeCards.cards!,
-          ...this.state.communityCards,
-        ]);
-      } else {
-        const result = determineWinners(
-          eligiblePlayers.map((player) => ({
-            playerId: player.id,
-            holeCards: player.holeCards.cards!,
-          })),
-          this.state.communityCards
-        );
-        winnerIds = result.winners
-          .map((winnerId) =>
-            eligiblePlayers.find((player) => player.id === winnerId)
-          )
-          .filter((player): player is PlayerState => player !== undefined)
-          .map((player) => player.id);
-        winningHand = result.winningHand;
+      for (let i = 1; i < eligiblePlayers.length; i++) {
+        const hand = getEvaluatedHand(eligiblePlayers[i]);
+        const comparison = compareHands(hand, winningHand);
+
+        if (comparison === ComparisonResult.Win) {
+          winningHand = hand;
+          winnerIds = [eligiblePlayers[i].id];
+        } else if (comparison === ComparisonResult.Tie) {
+          winnerIds.push(eligiblePlayers[i].id);
+        }
       }
 
       winnerIds = this.orderWinnersForOddChip(winnerIds);
