@@ -108,14 +108,18 @@ export class Table {
     return {
       ...this.state,
       players: this.state.players.map((p) => ({
-        ...p,
+        id: p.id,
+        seat: p.seat,
+        stack: p.stack,
+        committed: p.committed,
+        status: p.status,
         holeCards: p.holeCards.cards
           ? { cards: [...p.holeCards.cards] as [Card, Card] }
           : {},
       })),
       communityCards: [...this.state.communityCards],
       pots: this.state.pots.map((pot) => ({
-        ...pot,
+        total: pot.total,
         participants: [...pot.participants],
       })),
       bettingRound: this.state.bettingRound
@@ -807,8 +811,9 @@ export class Table {
     playerId: PlayerId,
     action: PlayerAction
   ): Result<TableState, TableError> {
-    const previousPlayer = this.state.players.find((p) => p.id === playerId);
-    const previousCommitted = previousPlayer?.committed ?? 0n;
+    const playerIndex = this.state.players.findIndex((p) => p.id === playerId);
+    const previousCommitted =
+      playerIndex === -1 ? 0n : this.state.players[playerIndex].committed;
 
     const actionResult = applyActionToBettingRound(
       this.state,
@@ -821,7 +826,8 @@ export class Table {
 
     this.state = actionResult.value;
 
-    const updatedPlayer = this.state.players.find((p) => p.id === playerId);
+    const updatedPlayer: PlayerState | undefined =
+      this.state.players[playerIndex];
     if (updatedPlayer) {
       const contributionDelta = updatedPlayer.committed - previousCommitted;
       if (contributionDelta > 0n) {

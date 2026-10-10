@@ -3,7 +3,12 @@
  */
 
 import { ChipAmount } from '../core/money.js';
-import { TableState, PlayerId, PlayerStatus } from '../core/table.js';
+import {
+  TableState,
+  PlayerId,
+  PlayerState,
+  PlayerStatus,
+} from '../core/table.js';
 import { Result, ok, err } from '../core/result.js';
 import { PokerError, ErrorCode, createError } from '../core/errors.js';
 
@@ -67,6 +72,13 @@ export function getCallAmount(
   if (!player) {
     return 0n;
   }
+  return getPlayerCallAmount(tableState, player);
+}
+
+function getPlayerCallAmount(
+  tableState: TableState,
+  player: PlayerState
+): ChipAmount {
   const currentBet = getCurrentBet(tableState);
   const amountToCall = currentBet - player.committed;
   return amountToCall > 0n ? amountToCall : 0n;
@@ -155,7 +167,7 @@ export function getAvailableActions(
   }
 
   const actions: PlayerActionType[] = [];
-  const callAmount = getCallAmount(tableState, playerId);
+  const callAmount = getPlayerCallAmount(tableState, player);
   const currentBet = getCurrentBet(tableState);
   const canBetOrRaise = hasOpponentWhoCanAct(tableState, playerId);
 
@@ -228,8 +240,20 @@ export function validateAction(
   playerId: PlayerId,
   action: PlayerAction
 ): Result<void, TableError> {
-  // Find the player
-  const player = tableState.players.find((p) => p.id === playerId);
+  return validateActionForPlayer(
+    tableState,
+    tableState.players.find((p) => p.id === playerId),
+    playerId,
+    action
+  );
+}
+
+export function validateActionForPlayer(
+  tableState: TableState,
+  player: PlayerState | undefined,
+  playerId: PlayerId,
+  action: PlayerAction
+): Result<void, TableError> {
   if (!player) {
     return err(
       createError(
@@ -263,7 +287,7 @@ export function validateAction(
     );
   }
 
-  const callAmount = getCallAmount(tableState, playerId);
+  const callAmount = getPlayerCallAmount(tableState, player);
   const currentBet = getCurrentBet(tableState);
 
   // Validate specific action types

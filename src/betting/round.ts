@@ -7,11 +7,12 @@ import {
   BettingRoundState,
   TableState,
   PlayerId,
+  PlayerState,
   PlayerStatus,
 } from '../core/table.js';
 import { Result, ok, err, isErr } from '../core/result.js';
 import { PokerError, ErrorCode, createError } from '../core/errors.js';
-import { PlayerAction, validateAction } from './actions.js';
+import { PlayerAction, validateActionForPlayer } from './actions.js';
 
 /**
  * Gets the next active player in turn order.
@@ -19,20 +20,8 @@ import { PlayerAction, validateAction } from './actions.js';
  */
 function getNextActivePlayer(
   tableState: TableState,
-  currentPlayerId: PlayerId
+  currentPlayerIndex: number
 ): PlayerId | undefined {
-  if (tableState.players.length === 0) {
-    return undefined;
-  }
-
-  const currentPlayerIndex = tableState.players.findIndex(
-    (p) => p.id === currentPlayerId
-  );
-
-  if (currentPlayerIndex === -1) {
-    return undefined;
-  }
-
   // Start from the next player and wrap around.
   for (let i = 1; i <= tableState.players.length; i++) {
     const nextIndex = (currentPlayerIndex + i) % tableState.players.length;
@@ -53,16 +42,6 @@ function getActivePlayers(tableState: TableState): PlayerId[] {
   return tableState.players
     .filter((p) => p.status === PlayerStatus.Active && p.stack > 0n)
     .map((p) => p.id);
-}
-
-/**
- * Gets all players who are still contesting the hand.
- */
-function getPlayersInHand(tableState: TableState): TableState['players'] {
-  return tableState.players.filter(
-    (p) =>
-      p.status === PlayerStatus.Active || p.status === PlayerStatus.AllIn
-  );
 }
 
 /**
@@ -154,16 +133,23 @@ function recordActionAtBet(
  * received the action they are owed on this street.
  */
 function haveAllPlayersActed(tableState: TableState): boolean {
-  const playersInHand = getPlayersInHand(tableState);
-
-  // No betting remains if only one player is still contesting the hand.
-  if (playersInHand.length <= 1) {
-    return true;
+  let playersInHandCount = 0;
+  const actionablePlayers: PlayerState[] = [];
+  for (const player of tableState.players) {
+    if (player.status === PlayerStatus.AllIn) {
+      playersInHandCount++;
+    } else if (player.status === PlayerStatus.Active) {
+      playersInHandCount++;
+      if (player.stack > 0n) {
+        actionablePlayers.push(player);
+      }
+    }
   }
 
-  const actionablePlayers = playersInHand.filter(
-    (p) => p.status === PlayerStatus.Active && p.stack > 0n
-  );
+  // No betting remains if only one player is still contesting the hand.
+  if (playersInHandCount <= 1) {
+    return true;
+  }
 
   // Everyone relevant is all-in.
   if (actionablePlayers.length === 0) {
@@ -255,12 +241,17 @@ export function applyActionToBettingRound(
   playerId: PlayerId,
   action: PlayerAction
 ): Result<TableState, PokerError> {
-  const validationResult = validateAction(tableState, playerId, action);
+  const playerIndex = tableState.players.findIndex((p) => p.id === playerId);
+  const validationResult = validateActionForPlayer(
+    tableState,
+    playerIndex === -1 ? undefined : tableState.players[playerIndex],
+    playerId,
+    action
+  );
   if (isErr(validationResult)) {
     return err(validationResult.error);
   }
 
-  const playerIndex = tableState.players.findIndex((p) => p.id === playerId);
   if (playerIndex === -1) {
     return err(
       createError(
@@ -406,7 +397,7 @@ export function applyActionToBettingRound(
     }
   }
 
-  const nextPlayerId = getNextActivePlayer(newTableState, playerId);
+  const nextPlayerId = getNextActivePlayer(newTableState, playerIndex);
   newTableState.currentPlayerId = nextPlayerId;
 
   return ok(newTableState);
@@ -425,12 +416,6 @@ export function applyActionToBettingRound(
  * @returns True if the betting round is complete
  */
 export function isBettingRoundComplete(tableState: TableState): boolean {
-  const playersInHand = getPlayersInHand(tableState);
-
-  if (playersInHand.length <= 1) {
-    return true;
-  }
-
   return haveAllPlayersActed(tableState);
 }
 
