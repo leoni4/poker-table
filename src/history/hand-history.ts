@@ -147,6 +147,15 @@ interface SerializableStreetEndedEvent extends SerializableBaseEvent {
 }
 
 /**
+ * Serializable UncalledBetReturnedEvent
+ */
+interface SerializableUncalledBetReturnedEvent extends SerializableBaseEvent {
+  type: 'UNCALLED_BET_RETURNED';
+  playerId: PlayerId;
+  amount: string;
+}
+
+/**
  * Serializable ShowdownEvent
  */
 interface SerializableShowdownEvent extends SerializableBaseEvent {
@@ -195,6 +204,7 @@ type SerializableHandEvent =
   | SerializableCardsDealtEvent
   | SerializableActionTakenEvent
   | SerializableStreetEndedEvent
+  | SerializableUncalledBetReturnedEvent
   | SerializableShowdownEvent
   | SerializablePotDistributedEvent
   | SerializableHandEndedEvent;
@@ -354,6 +364,14 @@ function serializeEvent(event: HandEvent): SerializableHandEvent {
         potTotal: serializeChipAmount(event.potTotal),
       };
 
+    case 'UNCALLED_BET_RETURNED':
+      return {
+        ...base,
+        type: 'UNCALLED_BET_RETURNED',
+        playerId: event.playerId,
+        amount: serializeChipAmount(event.amount),
+      };
+
     case 'SHOWDOWN':
       return {
         ...base,
@@ -505,6 +523,14 @@ function deserializeEvent(serialized: SerializableHandEvent): HandEvent {
         street: serialized.street,
         communityCards: serialized.communityCards.map(parseCard),
         potTotal: deserializeChipAmount(serialized.potTotal),
+      };
+
+    case 'UNCALLED_BET_RETURNED':
+      return {
+        ...base,
+        type: 'UNCALLED_BET_RETURNED',
+        playerId: serialized.playerId,
+        amount: deserializeChipAmount(serialized.amount),
       };
 
     case 'SHOWDOWN':

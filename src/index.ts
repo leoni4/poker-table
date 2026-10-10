@@ -45,6 +45,7 @@ export {
   CardsDealtEvent,
   ActionTakenEvent,
   StreetEndedEvent,
+  UncalledBetReturnedEvent,
   ShowdownEvent,
   PotDistributedEvent,
   HandEndedEvent,

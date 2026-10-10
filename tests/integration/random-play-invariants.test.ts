@@ -16,6 +16,7 @@ import {
   PlayerActionType,
   TableConfig,
   TableState,
+  HandHistory,
 } from '../../src/index.js';
 
 const TABLES = 40;
@@ -80,6 +81,56 @@ function chipsInPlay(state: TableState): ChipAmount {
     sumChips(state.players.map((p) => p.stack)) +
     sumChips(state.pots.map((p) => p.total))
   );
+}
+
+function unmatchedContributor(history: HandHistory): string | undefined {
+  const contributed = new Map<string, ChipAmount>();
+  const committed = new Map<string, ChipAmount>();
+  const folded = new Set<string>();
+  const add = (id: string, amount: ChipAmount): void => {
+    contributed.set(id, (contributed.get(id) ?? 0n) + amount);
+  };
+
+  for (const event of history.events) {
+    if (event.type === 'BLINDS_POSTED') {
+      for (const ante of event.antes ?? []) add(ante.playerId, ante.amount);
+      for (const blind of [event.smallBlind, event.bigBlind, event.straddle]) {
+        if (!blind) continue;
+        add(blind.playerId, blind.amount);
+        committed.set(
+          blind.playerId,
+          (committed.get(blind.playerId) ?? 0n) + blind.amount
+        );
+      }
+    } else if (event.type === 'ACTION_TAKEN') {
+      if (event.action === 'FOLD') folded.add(event.playerId);
+      if (event.committedAfter !== undefined) {
+        const delta =
+          event.committedAfter - (committed.get(event.playerId) ?? 0n);
+        if (delta > 0n) add(event.playerId, delta);
+        committed.set(event.playerId, event.committedAfter);
+      }
+    } else if (event.type === 'STREET_ENDED') {
+      committed.clear();
+    } else if (event.type === 'UNCALLED_BET_RETURNED') {
+      add(event.playerId, -event.amount);
+      const live = committed.get(event.playerId) ?? 0n;
+      committed.set(
+        event.playerId,
+        live > event.amount ? live - event.amount : 0n
+      );
+    }
+  }
+
+  for (const [id, amount] of contributed) {
+    if (folded.has(id)) continue;
+    let othersMax = 0n;
+    for (const [otherId, other] of contributed) {
+      if (otherId !== id && other > othersMax) othersMax = other;
+    }
+    if (amount > othersMax) return id;
+  }
+  return undefined;
 }
 
 function playTable(
@@ -295,6 +346,11 @@ function playTable(
 
     const history = table.getLastHandHistory();
     check(history !== null, `${where}: no hand history`);
+    const unmatched = unmatchedContributor(history);
+    check(
+      unmatched === undefined,
+      `${where}: uncalled chips of ${unmatched} left in a pot`
+    );
     const replayed = replayHand(history, history.tableConfig);
     const finalState = replayed[replayed.length - 1];
     for (const p of finalState.players) {

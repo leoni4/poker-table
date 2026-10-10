@@ -487,9 +487,11 @@ if (result) {
 
 `TableState.lastHandResult` contains the same structured result in state snapshots.
 
+Uncalled bets go back to the bettor. When a betting round closes (next street, run-out, showdown, or everybody else folds), the part of the highest wager that no other player matched is returned to that player's stack, and that player's `committed` goes down by the same amount. These chips are not part of `TableState.pots`, `STREET_ENDED.potTotal`, `HandResult.pots`, or `POT_DISTRIBUTED`. The hand history records the return as an `UNCALLED_BET_RETURNED` event (`playerId`, `amount`). For example, heads-up, when a player raises to 200 and the opponent calls all-in for 50, the pot is 100 and 150 goes back to the raiser. A player who was all-in and gets chips back is `active` again.
+
 ## Hand History
 
-Hand history is populated live and records hand start, forced bets, cards, actions, street transitions, showdown, pot distribution, and hand end:
+Hand history is populated live and records hand start, forced bets, cards, actions, street transitions, returned uncalled bets, showdown, pot distribution, and hand end:
 
 ```typescript
 const currentHistory = table.getCurrentHandHistory();
@@ -503,6 +505,9 @@ if (lastHistory) {
         break;
       case 'ACTION_TAKEN':
         console.log(event.playerId, event.action, event.amount);
+        break;
+      case 'UNCALLED_BET_RETURNED':
+        console.log(event.playerId, event.amount);
         break;
       case 'POT_DISTRIBUTED':
         console.log(event.pots); // amount, winners/shares, optional rake

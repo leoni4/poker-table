@@ -87,6 +87,16 @@ export interface StreetEndedEvent extends BaseEvent {
 }
 
 /**
+ * Uncalled bet returned event: the part of a wager that no other player
+ * matched goes back to the bettor when the betting round closes
+ */
+export interface UncalledBetReturnedEvent extends BaseEvent {
+  type: 'UNCALLED_BET_RETURNED';
+  playerId: PlayerId;
+  amount: ChipAmount;
+}
+
+/**
  * Showdown event
  */
 export interface ShowdownEvent extends BaseEvent {
@@ -135,6 +145,7 @@ export type HandEvent =
   | CardsDealtEvent
   | ActionTakenEvent
   | StreetEndedEvent
+  | UncalledBetReturnedEvent
   | ShowdownEvent
   | PotDistributedEvent
   | HandEndedEvent;
@@ -180,6 +191,15 @@ export function isStreetEndedEvent(
   event: HandEvent
 ): event is StreetEndedEvent {
   return event.type === 'STREET_ENDED';
+}
+
+/**
+ * Type guard for UncalledBetReturnedEvent
+ */
+export function isUncalledBetReturnedEvent(
+  event: HandEvent
+): event is UncalledBetReturnedEvent {
+  return event.type === 'UNCALLED_BET_RETURNED';
 }
 
 /**

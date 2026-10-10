@@ -19,6 +19,7 @@ import {
   isCardsDealtEvent,
   isActionTakenEvent,
   isStreetEndedEvent,
+  isUncalledBetReturnedEvent,
   isShowdownEvent,
   isPotDistributedEvent,
   isHandEndedEvent,
@@ -100,6 +101,10 @@ function applyEventToState(
 
   if (isStreetEndedEvent(event)) {
     return applyStreetEnded(state, event);
+  }
+
+  if (isUncalledBetReturnedEvent(event)) {
+    return applyUncalledBetReturned(state, event);
   }
 
   if (isShowdownEvent(event)) {
@@ -399,6 +404,32 @@ function applyStreetEnded(
     communityCards: event.communityCards,
     pots,
     currentPlayerId: firstPlayer?.id,
+  };
+}
+
+/**
+ * Apply UNCALLED_BET_RETURNED event
+ * @private
+ */
+function applyUncalledBetReturned(
+  state: TableState,
+  event: HandEvent & { type: 'UNCALLED_BET_RETURNED' }
+): TableState {
+  const players = state.players.map((p) => {
+    if (p.id !== event.playerId) {
+      return { ...p };
+    }
+    return {
+      ...p,
+      stack: p.stack + event.amount,
+      committed: p.committed > event.amount ? p.committed - event.amount : 0n,
+      status: p.status === PlayerStatus.AllIn ? PlayerStatus.Active : p.status,
+    };
+  });
+
+  return {
+    ...state,
+    players,
   };
 }
 

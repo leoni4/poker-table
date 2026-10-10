@@ -174,7 +174,7 @@ function handEvaluationFingerprint(): string {
 describe('Golden determinism fingerprints', () => {
 
   const TABLE_FLOW_FINGERPRINT =
-    'fd9751c97e732e447612b60303e30f0c58167e3f9ed4595beee5b2fd56b9eb74';
+    'af1daeb95fd6ca2a431737f3deb0c26295b2451fea542ee9af1a80552ea25b7a';
 
 
   const HAND_EVALUATION_FINGERPRINT =

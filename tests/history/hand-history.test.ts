@@ -9,6 +9,7 @@ import {
   handHistoryFromJSON,
   HandEvent,
   HandHistory,
+  isUncalledBetReturnedEvent,
 } from '../../src/history/index.js';
 import {
   createDefaultTableConfig,
@@ -296,6 +297,28 @@ describe('Hand History', () => {
   });
 
   describe('Additional event types', () => {
+    it('should serialize and deserialize uncalled bet returned event', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+      const player1 = createPlayerId('alice');
+
+      history.events.push({
+        type: 'UNCALLED_BET_RETURNED',
+        timestamp: 123,
+        playerId: player1,
+        amount: chips(150),
+      });
+
+      const json = handHistoryToJSON(history);
+      expect(json).toContain('"type": "UNCALLED_BET_RETURNED"');
+      expect(json).toContain('"playerId": "alice"');
+      expect(json).toContain('"amount": "150"');
+
+      const restored = handHistoryFromJSON(json);
+      expect(restored.events).toEqual(history.events);
+      expect(isUncalledBetReturnedEvent(restored.events[0])).toBe(true);
+    });
+
     it('should serialize and deserialize showdown event', () => {
       const config = createDefaultTableConfig();
       const history = createHandHistory(1, config);

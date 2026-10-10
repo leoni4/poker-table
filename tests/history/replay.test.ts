@@ -337,6 +337,65 @@ describe('Hand Replay', () => {
       expect(afterDistribution.players[1].stack).toBe(1001n); // 998 + 3
     });
 
+    it('should return an uncalled bet to the bettor', () => {
+      const config = createDefaultTableConfig();
+      const history = createHandHistory(1, config);
+
+      const player1 = createPlayerId('alice');
+      const player2 = createPlayerId('bob');
+
+      history.events.push({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: 1,
+        dealerSeat: 0,
+        players: [
+          { id: player1, seat: 0, stack: chips(1000) },
+          { id: player2, seat: 1, stack: chips(50) },
+        ],
+      });
+
+      history.events.push({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        smallBlind: { playerId: player1, amount: chips(1) },
+        bigBlind: { playerId: player2, amount: chips(2) },
+      });
+
+      history.events.push({
+        type: 'ACTION_TAKEN',
+        timestamp: Date.now(),
+        playerId: player1,
+        action: 'ALL_IN',
+        committedAfter: chips(1000),
+        allIn: true,
+      });
+
+      history.events.push({
+        type: 'ACTION_TAKEN',
+        timestamp: Date.now(),
+        playerId: player2,
+        action: 'ALL_IN',
+        committedAfter: chips(50),
+        allIn: true,
+      });
+
+      history.events.push({
+        type: 'UNCALLED_BET_RETURNED',
+        timestamp: Date.now(),
+        playerId: player1,
+        amount: chips(950),
+      });
+
+      const states = replayHand(history, config);
+
+      const afterReturn = states[4].players[0];
+      expect(afterReturn.stack).toBe(950n);
+      expect(afterReturn.committed).toBe(50n);
+      expect(afterReturn.status).toBe(PlayerStatus.Active);
+      expect(states[4].players[1].stack).toBe(0n);
+    });
+
     it('should handle hand ended event', () => {
       const config = createDefaultTableConfig();
       const history = createHandHistory(1, config);

@@ -451,6 +451,7 @@ export class Table {
           player.status === PlayerStatus.Active && player.stack > 0n
       );
       if (playersWhoCanAct.length <= 1) {
+        this.returnUncalledBet();
         return this.runoutToShowdown();
       }
     }
@@ -882,6 +883,8 @@ export class Table {
    */
   private resolveBettingRoundCompletion(): Result<TableState, TableError> {
     if (isBettingRoundComplete(this.state)) {
+      this.returnUncalledBet();
+
       const playersInHand = this.state.players.filter(
         (p) =>
           p.status === PlayerStatus.Active || p.status === PlayerStatus.AllIn
@@ -1070,6 +1073,51 @@ export class Table {
     }
 
     return ok(this.getState());
+  }
+
+  /**
+   * Return to the top contributor the part of their wager that no other
+   * player matched, before the betting round closes.
+   */
+  private returnUncalledBet(): void {
+    let topPlayerId: PlayerId | undefined;
+    let topAmount = 0n;
+    let secondAmount = 0n;
+    for (const [playerId, amount] of this.handContributions) {
+      if (amount > topAmount) {
+        secondAmount = topAmount;
+        topAmount = amount;
+        topPlayerId = playerId;
+      } else if (amount > secondAmount) {
+        secondAmount = amount;
+      }
+    }
+
+    const excess = topAmount - secondAmount;
+    const player = this.state.players.find((p) => p.id === topPlayerId);
+    if (
+      excess <= 0n ||
+      !player ||
+      (player.status !== PlayerStatus.Active &&
+        player.status !== PlayerStatus.AllIn)
+    ) {
+      return;
+    }
+
+    player.stack += excess;
+    player.committed =
+      player.committed > excess ? player.committed - excess : 0n;
+    if (player.status === PlayerStatus.AllIn) {
+      player.status = PlayerStatus.Active;
+    }
+    this.handContributions.set(player.id, secondAmount);
+    this.refreshPots();
+    this.appendHistoryEvent({
+      type: 'UNCALLED_BET_RETURNED',
+      timestamp: Date.now(),
+      playerId: player.id,
+      amount: excess,
+    });
   }
 
   /**
