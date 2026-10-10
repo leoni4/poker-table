@@ -139,6 +139,8 @@ const table = new HoldemTable(config, {
 });
 ```
 
+With `allowDuringHand: true`, a rebuy during a hand adds chips but does not change the player's status. A sitting-out player does not join the current hand. They become active at the next `startHand()`.
+
 ### Seating Players
 
 ```typescript
@@ -155,6 +157,8 @@ if (isOk(result)) {
   console.error('Failed to seat player:', result.error.message);
 }
 ```
+
+A player seated during a hand is not dealt into that hand. Their status is `sitting-out` until the next `startHand()`, which deals them in.
 
 ### Starting a Hand
 

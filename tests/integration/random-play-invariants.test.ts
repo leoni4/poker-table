@@ -10,6 +10,7 @@ import {
   validateAction,
   replayHand,
   TablePhase,
+  PlayerStatus,
   ChipAmount,
   PlayerAction,
   PlayerActionType,
@@ -18,6 +19,8 @@ import {
 } from '../../src/index.js';
 
 const TABLES = 40;
+const MID_HAND_JOIN_TABLES = 20;
+const MID_HAND_EVENT_CHANCE = 0.03;
 const HANDS_PER_TABLE = 50;
 const MAX_ACTIONS_PER_HAND = 500;
 
@@ -78,7 +81,10 @@ function chipsInPlay(state: TableState): ChipAmount {
   );
 }
 
-function playTable(tableIndex: number): { hands: number; actions: number } {
+function playTable(
+  tableIndex: number,
+  midHandJoins = false
+): { hands: number; actions: number } {
   const random = createRandom(0x5eed + tableIndex);
   const randomInt = (n: number): number => Math.floor(random() * n);
   const randomChips = (lo: ChipAmount, hi: ChipAmount): ChipAmount =>
@@ -95,7 +101,7 @@ function playTable(tableIndex: number): { hands: number; actions: number } {
     rake: randomInt(3) === 0 ? { percentage: 0.05, cap: bb * 3n } : undefined,
     rngSeed: randomInt(1e9),
   };
-  const table = new HoldemTable(config);
+  const table = new HoldemTable(config, { allowDuringHand: midHandJoins });
   const playerCount = 2 + randomInt(8);
   for (let i = 0; i < playerCount; i++) {
     const seated = table.seatPlayer(
@@ -108,6 +114,8 @@ function playTable(tableIndex: number): { hands: number; actions: number } {
   let bank = chipsInPlay(table.getState());
   let hands = 0;
   let actions = 0;
+  let lateJoinCount = 0;
+  let waiting = new Set<string>();
 
   for (let h = 0; h < HANDS_PER_TABLE; h++) {
     const where = `table ${tableIndex} hand ${h}`;
@@ -126,6 +134,15 @@ function playTable(tableIndex: number): { hands: number; actions: number } {
     hands++;
 
     let state = start.value;
+    for (const id of waiting) {
+      const p = state.players.find((q) => q.id === id);
+      check(
+        p !== undefined && p.holeCards.cards !== undefined,
+        `${where}: waiting ${id} not dealt in`
+      );
+    }
+    waiting = new Set<string>();
+    const reboughtThisHand = new Set<string>();
     let handActions = 0;
     while (BETTING_PHASES.has(state.phase)) {
       check(handActions < MAX_ACTIONS_PER_HAND, `${where}: hand does not end`);
@@ -135,8 +152,29 @@ function playTable(tableIndex: number): { hands: number; actions: number } {
         `${where}: board size in ${state.phase}`
       );
 
+      if (midHandJoins && random() < MID_HAND_EVENT_CHANCE) {
+        const amount = bb * BigInt(1 + randomInt(40));
+        if (state.players.length < config.maxPlayers && randomInt(2) === 0) {
+          const id = createPlayerId(`late${lateJoinCount++}`);
+          const seated = table.seatPlayer(id, amount);
+          check(seated.ok, `${where}: mid-hand seat ${id}`);
+          waiting.add(id);
+          state = seated.value;
+        } else {
+          const p = state.players[randomInt(state.players.length)];
+          const rebuy = table.rebuyPlayer(p.id, amount);
+          check(rebuy.ok, `${where}: mid-hand rebuy ${p.id}`);
+          if (p.status === PlayerStatus.SittingOut) waiting.add(p.id);
+          reboughtThisHand.add(p.id);
+          state = rebuy.value;
+        }
+        bank += amount;
+        check(chipsInPlay(state) === bank, `${where}: chips after side event`);
+      }
+
       const current = state.currentPlayerId;
       check(current !== undefined, `${where}: no current player`);
+      check(!waiting.has(current), `${where}: waiting ${current} acts`);
 
       const view = table.getStateForPlayer(current);
       for (const p of view.players) {
@@ -185,6 +223,13 @@ function playTable(tableIndex: number): { hands: number; actions: number } {
     }
 
     check(state.phase === TablePhase.Showdown, `${where}: end phase`);
+    for (const id of waiting) {
+      const p = state.players.find((q) => q.id === id);
+      check(
+        p?.status === PlayerStatus.SittingOut && p.holeCards.cards === undefined,
+        `${where}: waiting ${id} joined the hand`
+      );
+    }
     const handResult = table.getLastHandResult();
     check(handResult !== null, `${where}: no hand result`);
     check(
@@ -199,6 +244,7 @@ function playTable(tableIndex: number): { hands: number; actions: number } {
     const replayed = replayHand(history, history.tableConfig);
     const finalState = replayed[replayed.length - 1];
     for (const p of finalState.players) {
+      if (reboughtThisHand.has(p.id)) continue;
       const live = state.players.find((q) => q.id === p.id);
       check(live?.stack === p.stack, `${where}: replay stack of ${p.id}`);
     }
@@ -212,6 +258,17 @@ describe('Random-play invariants (pure play)', () => {
     'table %i keeps all invariants',
     (tableIndex) => {
       const { hands, actions } = playTable(tableIndex);
+      expect(hands).toBe(HANDS_PER_TABLE);
+      expect(actions).toBeGreaterThan(0);
+    }
+  );
+});
+
+describe('Random-play invariants (mid-hand seat and rebuy)', () => {
+  it.each(Array.from({ length: MID_HAND_JOIN_TABLES }, (_, i) => i))(
+    'table %i keeps all invariants',
+    (tableIndex) => {
+      const { hands, actions } = playTable(tableIndex, true);
       expect(hands).toBe(HANDS_PER_TABLE);
       expect(actions).toBeGreaterThan(0);
     }

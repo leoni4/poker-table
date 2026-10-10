@@ -1,8 +1,3 @@
-/**
- * Table management for poker game
- * Handles player seating, removal, and rebuy operations
- */
-
 import {
   TableConfig,
   TableState,
@@ -42,9 +37,6 @@ import {
 } from '../pot/index.js';
 import { determineWinners, evaluateHand } from '../hand-eval/index.js';
 
-/**
- * Table error type for seat management operations
- */
 export type TableError = PokerError;
 
 interface ForcedBetSeats {
@@ -54,23 +46,14 @@ interface ForcedBetSeats {
   headsUp: boolean;
 }
 
-/**
- * Options for rebuy operations
- */
 export interface RebuyOptions {
-  /**
-   * Minimum rebuy amount (defaults to big blind)
-   */
+
   minRebuy?: ChipAmount;
 
-  /**
-   * Maximum rebuy amount (defaults to no limit)
-   */
+
   maxRebuy?: ChipAmount;
 
-  /**
-   * Whether rebuy is allowed during active hand (defaults to false)
-   */
+ 
   allowDuringHand?: boolean;
 }
 
@@ -87,6 +70,7 @@ export class Table {
   private lastHandHistory: HandHistory | null = null;
   private handContributions = new Map<PlayerId, ChipAmount>();
   private lastBigBlindHandByPlayer = new Map<PlayerId, number>();
+  private playersWaitingForNextHand = new Set<PlayerId>();
 
   constructor(config: TableConfig, rebuyOptions: RebuyOptions = {}) {
     this.config = {
@@ -100,7 +84,6 @@ export class Table {
       allowDuringHand: rebuyOptions.allowDuringHand ?? false,
     };
 
-    // Initialize with empty table state
     this.state = {
       phase: TablePhase.Idle,
       handId: 0,
@@ -260,15 +243,23 @@ export class Table {
     // Find the first available seat
     const seat = this.findAvailableSeat();
 
+    // A player seated during a hand was not dealt in, so they must not act in
+    // it. They sit out and become active at the next deal.
+    const handInProgress = this.isHandInProgress();
+
     // Create new player state
     const newPlayer: PlayerState = {
       id: playerId,
       seat,
       stack: buyInAmount,
       committed: 0n,
-      status: PlayerStatus.Active,
+      status: handInProgress ? PlayerStatus.SittingOut : PlayerStatus.Active,
       holeCards: {},
     };
+
+    if (handInProgress) {
+      this.playersWaitingForNextHand.add(playerId);
+    }
 
     // Add player to the table
     this.state.players.push(newPlayer);
@@ -310,6 +301,8 @@ export class Table {
         );
       }
 
+      this.playersWaitingForNextHand.delete(playerId);
+
       // If the player is currently facing action, record an actual fold first
       // so the turn advances and the betting round cannot become stuck on a
       // player who is no longer allowed to act. Then mark them sitting out for
@@ -334,6 +327,7 @@ export class Table {
 
     // Remove player from the table
     this.state.players.splice(playerIndex, 1);
+    this.playersWaitingForNextHand.delete(playerId);
 
     // If current player was removed and it was their turn, clear current player
     if (this.state.currentPlayerId === playerId) {
@@ -398,16 +392,16 @@ export class Table {
       );
     }
 
-    // Add chips to player's stack
     player.stack += amount;
 
-    // Between hands, any funded player is eligible for the next deal. During
-    // an active hand preserve the hand-local status even when rebuys are
-    // explicitly enabled by configuration.
     if (!this.isHandInProgress() && player.stack > 0n) {
       player.status = PlayerStatus.Active;
     } else if (player.status === PlayerStatus.SittingOut) {
-      player.status = PlayerStatus.Active;
+      if (this.isHandInProgress()) {
+        this.playersWaitingForNextHand.add(playerId);
+      } else {
+        player.status = PlayerStatus.Active;
+      }
     }
 
     return ok(this.getState());
@@ -423,8 +417,6 @@ export class Table {
       return blindResult;
     }
 
-    // A seeded table owns one RNG stream. Creating a fresh deck consumes the
-    // next part of that stream instead of restarting it at the same seed.
     this.deck = createShuffledDeck(this.rng);
 
     const activePlayersWithCards = this.state.players.filter(
@@ -480,6 +472,13 @@ export class Table {
       );
     }
 
+    for (const player of this.state.players) {
+      if (this.playersWaitingForNextHand.has(player.id) && player.stack > 0n) {
+        player.status = PlayerStatus.Active;
+      }
+    }
+    this.playersWaitingForNextHand.clear();
+
     const eligiblePlayers = this.state.players.filter(
       (player) =>
         player.status !== PlayerStatus.SittingOut && player.stack > 0n
@@ -494,8 +493,6 @@ export class Table {
       );
     }
 
-    // Folded/all-in are hand-local statuses. Normalize them before moving the
-    // button so a completed hand can be followed by startHand() directly.
     for (const player of this.state.players) {
       player.committed = 0n;
       player.holeCards = {};
@@ -549,9 +546,6 @@ export class Table {
 
     this.setFirstToAct(forcedBetSeats);
 
-    // A short blind never lowers the nominal preflop price. A fully-posted
-    // live straddle becomes the opening wager; a short straddle is only an
-    // incomplete all-in increment over the big blind.
     const openingBet =
       straddle && straddle.amount > this.config.bigBlind
         ? straddle.amount
@@ -605,10 +599,6 @@ export class Table {
       return;
     }
 
-    // When play is heads-up, the player who most recently had the BB should
-    // receive the button/SB. This also handles a 3-handed -> HU transition
-    // where simply moving to the next occupied seat can assign the blinds
-    // incorrectly.
     if (activePlayers.length === 2) {
       const mostRecentBigBlind = [...activePlayers].sort(
         (a, b) =>
@@ -625,10 +615,8 @@ export class Table {
     }
 
     if (this.state.dealerSeat === undefined) {
-      // First hand - dealer is at first active player
       this.state.dealerSeat = activePlayers[0].seat;
     } else {
-      // Move dealer button clockwise to next active player
       const nextSeat = this.getNextActiveSeat(this.state.dealerSeat);
       this.state.dealerSeat = nextSeat;
     }
@@ -647,17 +635,14 @@ export class Table {
       return fromSeat;
     }
 
-    // Sort by seat number
     const sortedSeats = activePlayers.map((p) => p.seat).sort((a, b) => a - b);
 
-    // Find next seat after fromSeat (wrapping around)
     for (const seat of sortedSeats) {
       if (seat > fromSeat) {
         return seat;
       }
     }
 
-    // Wrap around to first seat
     return sortedSeats[0];
   }
 
@@ -704,7 +689,6 @@ export class Table {
     const posted: Array<{ playerId: PlayerId; amount: ChipAmount }> = [];
     for (const player of this.state.players) {
       if (player.status === PlayerStatus.Active) {
-        // Antes are dead money and must not increase the live street wager.
         const amount = this.deductFromPlayer(player, this.config.ante, false);
         if (amount > 0n) {
           posted.push({ playerId: player.id, amount });
@@ -821,7 +805,6 @@ export class Table {
     const previousPlayer = this.state.players.find((p) => p.id === playerId);
     const previousCommitted = previousPlayer?.committed ?? 0n;
 
-    // Apply action to betting round
     const actionResult = applyActionToBettingRound(
       this.state,
       playerId,
@@ -851,7 +834,6 @@ export class Table {
       allIn: updatedPlayer?.status === PlayerStatus.AllIn || undefined,
     });
 
-    // Check if betting round is complete
     if (isBettingRoundComplete(this.state)) {
       const playersInHand = this.state.players.filter(
         (p) =>
@@ -859,7 +841,6 @@ export class Table {
       );
 
       if (playersInHand.length <= 1) {
-        // Hand is over because everyone else folded.
         this.state.phase = TablePhase.Showdown;
         this.state.currentPlayerId = undefined;
         this.state.bettingRound = undefined;
@@ -880,13 +861,9 @@ export class Table {
       );
 
       if (playersWhoCanAct.length <= 1) {
-        // No further betting is possible (everyone else is all-in). Run the
-        // remaining board automatically instead of leaving the hand stuck
-        // without a current player.
         return this.runoutToShowdown();
       }
 
-      // Advance to next street
       return this.advanceStreet();
     }
 
@@ -902,14 +879,12 @@ export class Table {
       return err(createError(ErrorCode.INVALID_STATE, 'No deck available'));
     }
 
-    // Reset committed amounts for new betting round
     for (const player of this.state.players) {
       player.committed = 0n;
     }
 
     switch (this.state.phase) {
       case TablePhase.Preflop: {
-        // Deal flop
         const flopResult = this.deck.dealFlop();
         if (!flopResult.ok) {
           return err(
@@ -922,7 +897,6 @@ export class Table {
       }
 
       case TablePhase.Flop: {
-        // Deal turn
         const turnResult = this.deck.dealCommunityCard();
         if (!turnResult.ok) {
           return err(
@@ -935,7 +909,6 @@ export class Table {
       }
 
       case TablePhase.Turn: {
-        // Deal river
         const riverResult = this.deck.dealCommunityCard();
         if (!riverResult.ok) {
           return err(
@@ -948,7 +921,6 @@ export class Table {
       }
 
       case TablePhase.River: {
-        // Go to showdown
         this.state.phase = TablePhase.Showdown;
         this.state.currentPlayerId = undefined;
         this.state.bettingRound = undefined;
@@ -972,7 +944,6 @@ export class Table {
 
     this.appendStreetEvent(this.state.phase);
 
-    // Set first to act for new betting round (after dealer)
     this.setFirstToActPostFlop();
 
     if (this.state.currentPlayerId) {
@@ -1313,7 +1284,6 @@ export class Table {
       return;
     }
 
-    // Post-flop action starts with first active player after dealer
     const firstToActSeat = this.getNextActiveSeat(this.state.dealerSeat);
     const firstPlayer = this.getPlayerAtSeat(firstToActSeat);
     this.state.currentPlayerId = firstPlayer?.id;
@@ -1332,7 +1302,6 @@ export class Table {
       }
     }
 
-    // This should never happen as we check for table full before calling this
     return 0;
   }
 

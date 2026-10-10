@@ -93,6 +93,9 @@ export class HoldemTable {
    * The player will be assigned the next available seat. Players cannot be seated
    * if the table is full or if they're already seated.
    *
+   * A player seated during a hand is not dealt into that hand. Their status is
+   * `SittingOut` until the next `startHand()`, which deals them in.
+   *
    * @param playerId - Unique identifier for the player
    * @param buyInAmount - Initial chip amount (must be at least the big blind)
    * @returns Result with updated table state or error
@@ -122,6 +125,10 @@ export class HoldemTable {
    *
    * Allows a player to add more chips to their stack. Rebuy rules are
    * configured via rebuyOptions in the constructor.
+   *
+   * During a hand (only with `allowDuringHand: true`) the player's status does
+   * not change. A `SittingOut` player stays out of the current hand and becomes
+   * active at the next `startHand()`.
    *
    * @param playerId - Unique identifier for the player
    * @param amount - Amount of chips to add to the player's stack
