@@ -19,7 +19,12 @@ export * from './deck/index.js';
 export * from './hand-eval/index.js';
 
 // Re-export table management types and utilities
-export { Table, createTable, RebuyOptions } from './table/index.js';
+export {
+  Table,
+  createTable,
+  RebuyOptions,
+  TableOptions,
+} from './table/index.js';
 
 // Re-export betting types and utilities
 export {

@@ -436,4 +436,35 @@ describe('README Examples Validation', () => {
       expect(typeof table.getLastHandHistory).toBe('function');
     });
   });
+
+  describe('Training / Simulation Example', () => {
+    it('should play a hand without history and snapshots', () => {
+      const config = createDefaultTableConfig();
+      config.rngSeed = 7;
+      const table = new HoldemTable(config, {}, { recordHistory: false });
+      table.seatPlayer(createPlayerId('alice'), chips(1000));
+      table.seatPlayer(createPlayerId('bob'), chips(1000));
+
+      const dealt = table.dealHand();
+      expect(dealt).toStrictEqual({ ok: true, value: undefined });
+      if (dealt.ok) {
+        let playerId = table.getCurrentPlayerId();
+        while (playerId !== undefined) {
+          const legal = table.getAvailableActions();
+          const result = table.act(
+            playerId,
+            legal.includes('CHECK') ? { type: 'CHECK' } : { type: 'CALL' }
+          );
+          expect(isOk(result)).toBe(true);
+          playerId = table.getCurrentPlayerId();
+        }
+      }
+      const reward = table.getLastHandResult();
+
+      expect(table.getPhase()).toBe(TablePhase.Showdown);
+      expect(reward?.reason).toBe('showdown');
+      expect(table.getCurrentHandHistory()).toBeNull();
+      expect(table.getLastHandHistory()).toBeNull();
+    });
+  });
 });

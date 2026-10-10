@@ -525,6 +525,45 @@ When `rngSeed` is set, a `HoldemTable` owns one deterministic RNG stream. Two fr
 
 For mirrored A-vs-B / B-vs-A evaluation, create two fresh table instances with the same seed and the same seat/button schedule, then swap which agent occupies each seat. For independently parallelized hands, derive a deterministic per-hand seed and create a fresh table for that hand. `HandHistory` timestamps use wall-clock time and therefore are not deterministic bytes even when the cards and actions are deterministic.
 
+## Training / Simulation
+
+Two opt-in features make long simulation runs faster. They do not change cards, actions, pots, or results.
+
+- `recordHistory: false` in the third constructor parameter (`TableOptions`) turns off hand history recording. `getCurrentHandHistory()` and `getLastHandHistory()` then return `null`. `getLastHandResult()` still works. The same parameter is accepted by `createHoldemTable`, `Table`, and `createTable`.
+- `dealHand()` and `act(playerId, action)` do the same as `startHand()` and `applyAction()`, but return `Result<void, PokerError>` instead of a deep `TableState` copy. Use them with the snapshot-free getters `getCurrentPlayerId()`, `getPhase()`, `getAvailableActions()`, `getCallAmount()`, and `getMinimumRaiseSize()`. The last three are for the player to act and give the same values as the exported helpers called with `getState()`.
+
+```typescript
+import { HoldemTable, createDefaultTableConfig } from '@leoni4/poker-table';
+
+const config = createDefaultTableConfig();
+config.rngSeed = 7;
+const table = new HoldemTable(config, {}, { recordHistory: false });
+// seat players, then for each hand:
+const dealt = table.dealHand();
+if (dealt.ok) {
+  let playerId = table.getCurrentPlayerId();
+  while (playerId !== undefined) {
+    const legal = table.getAvailableActions();
+    table.act(
+      playerId,
+      legal.includes('CHECK') ? { type: 'CHECK' } : { type: 'CALL' }
+    );
+    playerId = table.getCurrentPlayerId();
+  }
+}
+const reward = table.getLastHandResult(); // null history, but the result is available
+```
+
+`getState()` and `getStateForPlayer()` still return deep copies. For an agent that reads one of them before every decision, only `recordHistory: false` gives a speed-up.
+
+Measured with a random check/call/bet/raise agent (Intel i7-13650HX, Node v24.20.0, hands per second, median of 3 runs):
+
+| Mode                                                  | Heads-up | 6-max  | 9-max  |
+| ----------------------------------------------------- | -------- | ------ | ------ |
+| Default (`startHand` / `applyAction`)                 | 65 186   | 16 682 | 8 994  |
+| `recordHistory: false`                                | 79 788   | 17 798 | 9 620  |
+| `recordHistory: false` + `dealHand` / `act` / getters | 104 281  | 27 342 | 14 302 |
+
 ## Testing & Quality
 
 The library includes comprehensive test coverage to ensure reliability:

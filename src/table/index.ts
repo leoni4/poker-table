@@ -18,7 +18,11 @@ import { createRngFromConfig } from '../rng/factory.js';
 import { Rng } from '../rng/interface.js';
 import {
   PlayerAction,
+  PlayerActionType,
   applyActionToBettingRound,
+  getAvailableActions,
+  getCallAmount,
+  getMinimumRaiseSize,
   isBettingRoundComplete,
   startBettingRound,
 } from '../betting/index.js';
@@ -63,6 +67,19 @@ export interface RebuyOptions {
 }
 
 /**
+ * Runtime options of a table. They are not part of `TableConfig` and are not
+ * stored in hand histories.
+ */
+export interface TableOptions {
+  /**
+   * Record a `HandHistory` for each hand (default `true`). With `false`,
+   * `getCurrentHandHistory()` and `getLastHandHistory()` return `null`; all
+   * other output is the same.
+   */
+  recordHistory?: boolean;
+}
+
+/**
  * Table class managing player seating and game state
  */
 export class Table {
@@ -77,8 +94,13 @@ export class Table {
   private lastBigBlindHandByPlayer = new Map<PlayerId, number>();
   private playersWaitingForNextHand = new Set<PlayerId>();
   private playersLeavingAfterHand = new Set<PlayerId>();
+  private recordHistory: boolean;
 
-  constructor(config: TableConfig, rebuyOptions: RebuyOptions = {}) {
+  constructor(
+    config: TableConfig,
+    rebuyOptions: RebuyOptions = {},
+    options: TableOptions = {}
+  ) {
     this.config = {
       ...config,
       rake: config.rake ? { ...config.rake } : undefined,
@@ -89,6 +111,7 @@ export class Table {
       maxRebuy: rebuyOptions.maxRebuy,
       allowDuringHand: rebuyOptions.allowDuringHand ?? false,
     };
+    this.recordHistory = options.recordHistory ?? true;
 
     this.state = {
       phase: TablePhase.Idle,
@@ -159,6 +182,46 @@ export class Table {
           : {},
     }));
     return state;
+  }
+
+  /** Get the ID of the player to act, without a state snapshot. */
+  getCurrentPlayerId(): PlayerId | undefined {
+    return this.state.currentPlayerId;
+  }
+
+  /** Get the current table phase, without a state snapshot. */
+  getPhase(): TablePhase {
+    return this.state.phase;
+  }
+
+  /**
+   * Get the legal actions of the player to act, without a state snapshot.
+   * Same as `getAvailableActions(getState(), getCurrentPlayerId())`; empty
+   * when no player is to act.
+   */
+  getAvailableActions(): PlayerActionType[] {
+    const playerId = this.state.currentPlayerId;
+    return playerId === undefined
+      ? []
+      : getAvailableActions(this.state, playerId);
+  }
+
+  /**
+   * Get the call amount of the player to act, without a state snapshot.
+   * Same as `getCallAmount(getState(), getCurrentPlayerId())`; `0n` when no
+   * player is to act.
+   */
+  getCallAmount(): ChipAmount {
+    const playerId = this.state.currentPlayerId;
+    return playerId === undefined ? 0n : getCallAmount(this.state, playerId);
+  }
+
+  /**
+   * Get the minimum `RAISE` increment, without a state snapshot.
+   * Same as `getMinimumRaiseSize(getState())`.
+   */
+  getMinimumRaiseSize(): ChipAmount {
+    return getMinimumRaiseSize(this.state);
   }
 
   /**
@@ -308,7 +371,7 @@ export class Table {
       // player who is no longer allowed to act. Then mark them sitting out for
       // subsequent hands.
       if (this.state.currentPlayerId === playerId) {
-        const foldResult = this.applyAction(playerId, { type: 'FOLD' });
+        const foldResult = this.act(playerId, { type: 'FOLD' });
         if (!foldResult.ok) {
           return foldResult;
         }
@@ -325,7 +388,11 @@ export class Table {
       }
 
       if (player.status === PlayerStatus.Active) {
-        return this.foldOutOfTurn(playerId);
+        const foldResult = this.foldOutOfTurn(playerId);
+        if (!foldResult.ok) {
+          return foldResult;
+        }
+        return ok(this.getState());
       }
 
       player.status = PlayerStatus.SittingOut;
@@ -420,7 +487,19 @@ export class Table {
    * @returns Result with updated table state or error
    */
   startHand(): Result<TableState, TableError> {
-    const blindResult = this.startNewHand();
+    const dealResult = this.dealHand();
+    if (!dealResult.ok) {
+      return dealResult;
+    }
+    return ok(this.getState());
+  }
+
+  /**
+   * Same as `startHand()`, but returns no state snapshot
+   * @returns Empty result or error
+   */
+  dealHand(): Result<void, TableError> {
+    const blindResult = this.postForcedBets();
     if (!blindResult.ok) {
       return blindResult;
     }
@@ -444,14 +523,16 @@ export class Table {
       player.holeCards = { cards: holeCardsResult.value[index] };
     });
 
-    this.appendHistoryEvent({
-      type: 'CARDS_DEALT',
-      timestamp: Date.now(),
-      players: activePlayersWithCards.map((player) => ({
-        playerId: player.id,
-        cards: player.holeCards.cards!,
-      })),
-    });
+    if (this.currentHandHistory) {
+      this.appendHistoryEvent({
+        type: 'CARDS_DEALT',
+        timestamp: Date.now(),
+        players: activePlayersWithCards.map((player) => ({
+          playerId: player.id,
+          cards: player.holeCards.cards!,
+        })),
+      });
+    }
 
     if (isBettingRoundComplete(this.state)) {
       const playersWhoCanAct = this.state.players.filter(
@@ -464,7 +545,7 @@ export class Table {
       }
     }
 
-    return ok(this.getState());
+    return ok(undefined);
   }
 
   /**
@@ -472,6 +553,14 @@ export class Table {
    * @returns Result with updated table state or error
    */
   startNewHand(): Result<TableState, TableError> {
+    const blindResult = this.postForcedBets();
+    if (!blindResult.ok) {
+      return blindResult;
+    }
+    return ok(this.getState());
+  }
+
+  private postForcedBets(): Result<void, TableError> {
     if (this.isHandInProgress()) {
       return err(
         createError(
@@ -522,36 +611,39 @@ export class Table {
     this.state.phase = TablePhase.Preflop;
     this.state.handId++;
 
-    this.currentHandHistory = createHandHistory(
-      this.state.handId,
-      this.getConfig()
-    );
-    this.appendHistoryEvent({
-      type: 'HAND_STARTED',
-      timestamp: Date.now(),
-      handId: this.state.handId,
-      dealerSeat: this.state.dealerSeat!,
-      players: this.state.players
-        .filter((player) => player.status !== PlayerStatus.SittingOut)
-        .map((player) => ({
-          id: player.id,
-          seat: player.seat,
-          stack: player.stack,
-        })),
-    });
+    this.currentHandHistory = this.recordHistory
+      ? createHandHistory(this.state.handId, this.getConfig())
+      : null;
+    if (this.currentHandHistory) {
+      this.appendHistoryEvent({
+        type: 'HAND_STARTED',
+        timestamp: Date.now(),
+        handId: this.state.handId,
+        dealerSeat: this.state.dealerSeat!,
+        players: this.state.players
+          .filter((player) => player.status !== PlayerStatus.SittingOut)
+          .map((player) => ({
+            id: player.id,
+            seat: player.seat,
+            stack: player.stack,
+          })),
+      });
+    }
 
     const antes = this.postAntes();
     const blinds = this.postBlinds(forcedBetSeats);
     const straddle = this.postStraddle(forcedBetSeats);
     this.refreshPots();
 
-    this.appendHistoryEvent({
-      type: 'BLINDS_POSTED',
-      timestamp: Date.now(),
-      ...blinds,
-      straddle,
-      antes: antes.length > 0 ? antes : undefined,
-    });
+    if (this.currentHandHistory) {
+      this.appendHistoryEvent({
+        type: 'BLINDS_POSTED',
+        timestamp: Date.now(),
+        ...blinds,
+        straddle,
+        antes: antes.length > 0 ? antes : undefined,
+      });
+    }
 
     this.setFirstToAct(forcedBetSeats);
 
@@ -592,7 +684,7 @@ export class Table {
       };
     }
 
-    return ok(this.getState());
+    return ok(undefined);
   }
 
   /**
@@ -811,6 +903,20 @@ export class Table {
     playerId: PlayerId,
     action: PlayerAction
   ): Result<TableState, TableError> {
+    const actResult = this.act(playerId, action);
+    if (!actResult.ok) {
+      return actResult;
+    }
+    return ok(this.getState());
+  }
+
+  /**
+   * Same as `applyAction()`, but returns no state snapshot
+   * @param playerId - The player performing the action
+   * @param action - The action to perform
+   * @returns Empty result or error
+   */
+  act(playerId: PlayerId, action: PlayerAction): Result<void, TableError> {
     const playerIndex = this.state.players.findIndex((p) => p.id === playerId);
     const previousCommitted =
       playerIndex === -1 ? 0n : this.state.players[playerIndex].committed;
@@ -835,15 +941,17 @@ export class Table {
       }
     }
     this.refreshPots();
-    this.appendHistoryEvent({
-      type: 'ACTION_TAKEN',
-      timestamp: Date.now(),
-      playerId,
-      action: action.type,
-      amount: action.amount,
-      committedAfter: updatedPlayer?.committed,
-      allIn: updatedPlayer?.status === PlayerStatus.AllIn || undefined,
-    });
+    if (this.currentHandHistory) {
+      this.appendHistoryEvent({
+        type: 'ACTION_TAKEN',
+        timestamp: Date.now(),
+        playerId,
+        action: action.type,
+        amount: action.amount,
+        committedAfter: updatedPlayer?.committed,
+        allIn: updatedPlayer?.status === PlayerStatus.AllIn || undefined,
+      });
+    }
 
     return this.resolveBettingRoundCompletion();
   }
@@ -852,7 +960,7 @@ export class Table {
    * Fold a player who leaves the table while another player is to act
    * @private
    */
-  private foldOutOfTurn(playerId: PlayerId): Result<TableState, TableError> {
+  private foldOutOfTurn(playerId: PlayerId): Result<void, TableError> {
     const player = this.state.players.find((p) => p.id === playerId);
     if (!player) {
       return err(
@@ -865,14 +973,16 @@ export class Table {
 
     player.status = PlayerStatus.Folded;
     this.refreshPots();
-    this.appendHistoryEvent({
-      type: 'ACTION_TAKEN',
-      timestamp: Date.now(),
-      playerId,
-      action: 'FOLD',
-      committedAfter: player.committed,
-      outOfTurn: true,
-    });
+    if (this.currentHandHistory) {
+      this.appendHistoryEvent({
+        type: 'ACTION_TAKEN',
+        timestamp: Date.now(),
+        playerId,
+        action: 'FOLD',
+        committedAfter: player.committed,
+        outOfTurn: true,
+      });
+    }
 
     const completionResult = this.resolveBettingRoundCompletion();
     if (!completionResult.ok) {
@@ -883,7 +993,7 @@ export class Table {
     if (foldedPlayer) {
       foldedPlayer.status = PlayerStatus.SittingOut;
     }
-    return ok(this.getState());
+    return ok(undefined);
   }
 
   /**
@@ -891,7 +1001,7 @@ export class Table {
    * round is complete
    * @private
    */
-  private resolveBettingRoundCompletion(): Result<TableState, TableError> {
+  private resolveBettingRoundCompletion(): Result<void, TableError> {
     if (isBettingRoundComplete(this.state)) {
       this.returnUncalledBet();
 
@@ -913,7 +1023,7 @@ export class Table {
           }
         }
 
-        return ok(this.getState());
+        return ok(undefined);
       }
 
       const playersWhoCanAct = playersInHand.filter(
@@ -927,14 +1037,14 @@ export class Table {
       return this.advanceStreet();
     }
 
-    return ok(this.getState());
+    return ok(undefined);
   }
 
   /**
    * Advance to the next street (flop -> turn -> river -> showdown)
    * @private
    */
-  private advanceStreet(): Result<TableState, TableError> {
+  private advanceStreet(): Result<void, TableError> {
     if (!this.deck) {
       return err(createError(ErrorCode.INVALID_STATE, 'No deck available'));
     }
@@ -990,7 +1100,7 @@ export class Table {
           return settlementResult;
         }
 
-        return ok(this.getState());
+        return ok(undefined);
       }
 
       default:
@@ -1022,13 +1132,13 @@ export class Table {
       this.state = roundResult.value;
     }
 
-    return ok(this.getState());
+    return ok(undefined);
   }
 
   /**
    * Deal every remaining community card when no further betting is possible.
    */
-  private runoutToShowdown(): Result<TableState, TableError> {
+  private runoutToShowdown(): Result<void, TableError> {
     if (!this.deck) {
       return err(createError(ErrorCode.INVALID_STATE, 'No deck available'));
     }
@@ -1082,7 +1192,7 @@ export class Table {
       return settlementResult;
     }
 
-    return ok(this.getState());
+    return ok(undefined);
   }
 
   /**
@@ -1122,12 +1232,14 @@ export class Table {
     }
     this.handContributions.set(player.id, secondAmount);
     this.refreshPots();
-    this.appendHistoryEvent({
-      type: 'UNCALLED_BET_RETURNED',
-      timestamp: Date.now(),
-      playerId: player.id,
-      amount: excess,
-    });
+    if (this.currentHandHistory) {
+      this.appendHistoryEvent({
+        type: 'UNCALLED_BET_RETURNED',
+        timestamp: Date.now(),
+        playerId: player.id,
+        amount: excess,
+      });
+    }
   }
 
   private getPlayerStatus(playerId: PlayerId): PlayerStatus | undefined {
@@ -1260,14 +1372,16 @@ export class Table {
         holeCards: [...player.holeCards.cards!] as [Card, Card],
       }));
 
-    this.appendHistoryEvent({
-      type: 'SHOWDOWN',
-      timestamp: Date.now(),
-      players: revealedPlayers.map((player) => ({
-        playerId: player.playerId,
-        cards: [...player.holeCards] as [Card, Card],
-      })),
-    });
+    if (this.currentHandHistory) {
+      this.appendHistoryEvent({
+        type: 'SHOWDOWN',
+        timestamp: Date.now(),
+        players: revealedPlayers.map((player) => ({
+          playerId: player.playerId,
+          cards: [...player.holeCards] as [Card, Card],
+        })),
+      });
+    }
 
     const evaluatedHands = new Map<PlayerId, EvaluatedHand>();
     const getEvaluatedHand = (player: PlayerState): EvaluatedHand => {
@@ -1451,6 +1565,9 @@ export class Table {
   }
 
   private appendStreetEvent(street: TablePhase): void {
+    if (!this.currentHandHistory) {
+      return;
+    }
     this.appendHistoryEvent({
       type: 'STREET_ENDED',
       timestamp: Date.now(),
@@ -1461,6 +1578,9 @@ export class Table {
   }
 
   private appendPotDistributionEvent(pots: SettledPotResult[]): void {
+    if (!this.currentHandHistory) {
+      return;
+    }
     this.appendHistoryEvent({
       type: 'POT_DISTRIBUTED',
       timestamp: Date.now(),
@@ -1549,7 +1669,8 @@ export class Table {
  */
 export function createTable(
   config: TableConfig,
-  rebuyOptions?: RebuyOptions
+  rebuyOptions?: RebuyOptions,
+  options?: TableOptions
 ): Table {
-  return new Table(config, rebuyOptions);
+  return new Table(config, rebuyOptions, options);
 }

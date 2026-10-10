@@ -2,12 +2,12 @@
  * Public API for HoldemTable - main entry point for library consumers
  */
 
-import { TableConfig, TableState, PlayerId } from './core/table.js';
+import { TableConfig, TableState, PlayerId, TablePhase } from './core/table.js';
 import { ChipAmount } from './core/money.js';
 import { Result } from './core/result.js';
 import { PokerError } from './core/errors.js';
-import { PlayerAction } from './betting/index.js';
-import { Table, RebuyOptions } from './table/index.js';
+import { PlayerAction, PlayerActionType } from './betting/index.js';
+import { Table, RebuyOptions, TableOptions } from './table/index.js';
 
 /**
  * Main class for managing a No-Limit Texas Hold'em poker table
@@ -45,9 +45,14 @@ export class HoldemTable {
    *
    * @param config - Table configuration including blinds, player limits, and optional settings
    * @param rebuyOptions - Optional rebuy configuration
+   * @param options - Optional runtime options, for example `recordHistory`
    */
-  constructor(config: TableConfig, rebuyOptions?: RebuyOptions) {
-    this.table = new Table(config, rebuyOptions);
+  constructor(
+    config: TableConfig,
+    rebuyOptions?: RebuyOptions,
+    options?: TableOptions
+  ) {
+    this.table = new Table(config, rebuyOptions, options);
   }
 
   /**
@@ -204,12 +209,71 @@ export class HoldemTable {
   }
 
   /**
+   * Same as `startHand()`, but returns no state snapshot.
+   *
+   * Use it with `act()` and the snapshot-free getters in a simulation loop.
+   *
+   * @returns Empty result or error
+   */
+  dealHand(): Result<void, PokerError> {
+    return this.table.dealHand();
+  }
+
+  /**
+   * Same as `applyAction()`, but returns no state snapshot.
+   *
+   * @param playerId - Unique identifier for the player performing the action
+   * @param action - The action to perform
+   * @returns Empty result or error
+   */
+  act(playerId: PlayerId, action: PlayerAction): Result<void, PokerError> {
+    return this.table.act(playerId, action);
+  }
+
+  /** Gets the ID of the player to act, without a state snapshot. */
+  getCurrentPlayerId(): PlayerId | undefined {
+    return this.table.getCurrentPlayerId();
+  }
+
+  /** Gets the current table phase, without a state snapshot. */
+  getPhase(): TablePhase {
+    return this.table.getPhase();
+  }
+
+  /**
+   * Gets the legal actions of the player to act, without a state snapshot.
+   * Same as `getAvailableActions(getState(), getCurrentPlayerId())`; empty
+   * when no player is to act.
+   */
+  getAvailableActions(): PlayerActionType[] {
+    return this.table.getAvailableActions();
+  }
+
+  /**
+   * Gets the call amount of the player to act, without a state snapshot.
+   * Same as `getCallAmount(getState(), getCurrentPlayerId())`; `0n` when no
+   * player is to act.
+   */
+  getCallAmount(): ChipAmount {
+    return this.table.getCallAmount();
+  }
+
+  /**
+   * Gets the minimum `RAISE` increment, without a state snapshot.
+   * Same as `getMinimumRaiseSize(getState())`.
+   */
+  getMinimumRaiseSize(): ChipAmount {
+    return this.table.getMinimumRaiseSize();
+  }
+
+  /**
    * Get the current hand history (hand in progress)
    *
    * Returns the history of the current hand including all events that have
    * occurred so far. Returns null if no hand is currently in progress.
    *
-   * @returns Current hand history or null
+   * @returns Current hand history, or null (also when the table was created
+   * with `recordHistory: false`)
    */
   getCurrentHandHistory(): ReturnType<Table['getCurrentHandHistory']> {
     return this.table.getCurrentHandHistory();
@@ -222,7 +286,8 @@ export class HoldemTable {
    * for reviewing what happened in the previous hand. Returns null if no
    * hands have been completed yet.
    *
-   * @returns Last hand history or null
+   * @returns Last hand history, or null (also when the table was created
+   * with `recordHistory: false`)
    */
   getLastHandHistory(): ReturnType<Table['getLastHandHistory']> {
     return this.table.getLastHandHistory();
@@ -241,11 +306,13 @@ export class HoldemTable {
  *
  * @param config - Table configuration
  * @param rebuyOptions - Optional rebuy configuration
+ * @param options - Optional runtime options, for example `recordHistory`
  * @returns New HoldemTable instance
  */
 export function createHoldemTable(
   config: TableConfig,
-  rebuyOptions?: RebuyOptions
+  rebuyOptions?: RebuyOptions,
+  options?: TableOptions
 ): HoldemTable {
-  return new HoldemTable(config, rebuyOptions);
+  return new HoldemTable(config, rebuyOptions, options);
 }
