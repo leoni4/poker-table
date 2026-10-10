@@ -1481,7 +1481,7 @@ export class Table {
       })),
     });
     this.currentHandHistory.endTime = Date.now();
-    this.lastHandHistory = this.cloneHistory(this.currentHandHistory);
+    this.lastHandHistory = this.currentHandHistory;
     this.currentHandHistory = null;
   }
 
