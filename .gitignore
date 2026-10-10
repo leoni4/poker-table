@@ -34,3 +34,7 @@ yarn-error.log*
 *.tmp
 .cache/
 *.patch
+
+.scratch
+.agents
+CLAUDE.local.md
