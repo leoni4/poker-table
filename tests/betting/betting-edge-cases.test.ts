@@ -425,6 +425,14 @@ describe('Betting Actions - Edge Cases', () => {
             status: PlayerStatus.Active,
             holeCards: {},
           },
+          {
+            id: createPlayerId('opponent'),
+            seat: 1,
+            stack: chips(1000),
+            committed: 0n,
+            status: PlayerStatus.Active,
+            holeCards: {},
+          },
         ],
         currentPlayerId: createPlayerId('p1'),
       });
@@ -469,6 +477,14 @@ describe('Betting Actions - Edge Cases', () => {
             seat: 0,
             stack: chips(400),
             committed: chips(100), // Already committed
+            status: PlayerStatus.Active,
+            holeCards: {},
+          },
+          {
+            id: createPlayerId('opponent'),
+            seat: 1,
+            stack: chips(1000),
+            committed: 0n,
             status: PlayerStatus.Active,
             holeCards: {},
           },
@@ -582,15 +598,17 @@ describe('Betting Actions - Edge Cases', () => {
         currentPlayerId: createPlayerId('p3'),
       });
 
-      // p3 needs to call 300, can raise
+      // p3 needs to call 300; both opponents are all-in, so p3 cannot raise
       const actions = getAvailableActions(tableState, createPlayerId('p3'));
 
-      expect(actions).toContain('CALL');
-      expect(actions).toContain('RAISE');
+      expect(actions).toEqual(['FOLD', 'CALL']);
 
       const raise: PlayerAction = { type: 'RAISE', amount: chips(300) };
       const result = validateAction(tableState, createPlayerId('p3'), raise);
-      expect(isOk(result)).toBe(true);
+      expect(isErr(result)).toBe(true);
+      if (isErr(result)) {
+        expect(result.error.code).toBe(ErrorCode.INVALID_ACTION);
+      }
     });
 
     it('should handle heads-up all-in vs all-in', () => {
@@ -753,9 +771,8 @@ describe('Betting Actions - Edge Cases', () => {
 
       const actions = getAvailableActions(tableState, createPlayerId('p2'));
 
-      // Last active player can check or bet
-      expect(actions).toContain('CHECK');
-      expect(actions).toContain('BET');
+      // Last active player can check, but cannot bet against nobody
+      expect(actions).toEqual(['FOLD', 'CHECK']);
     });
 
     it('should handle reopening betting after small all-in', () => {

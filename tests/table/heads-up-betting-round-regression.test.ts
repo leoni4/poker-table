@@ -14,6 +14,7 @@ import {
 } from '../../src/core/table.js';
 import { chips } from '../../src/core/money.js';
 import { isOk } from '../../src/core/result.js';
+import { getAvailableActions } from '../../src/betting/actions.js';
 
 function expectOk<T>(
   result: ReturnType<Table['applyAction']>
@@ -239,7 +240,7 @@ describe('heads-up betting-round regression', () => {
     ).toBe(200n);
   });
 
-  it('constructs and settles side pots when three players are all-in', () => {
+  it('settles side pots when the last player calls two all-ins', () => {
     const config = createDefaultTableConfig();
     config.rngSeed = 9002;
     config.maxPlayers = 3;
@@ -255,16 +256,22 @@ describe('heads-up betting-round regression', () => {
 
     let state = expectOk<ReturnType<Table['getState']>>(table.startHand());
 
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 2; i++) {
       expect(state.currentPlayerId).toBeDefined();
       state = expectOk<ReturnType<Table['getState']>>(
         table.applyAction(state.currentPlayerId!, { type: 'ALL_IN' })
       );
     }
 
+    expect(state.currentPlayerId).toBe(p2);
+    expect(getAvailableActions(state, p2)).toEqual(['FOLD', 'CALL']);
+    state = expectOk<ReturnType<Table['getState']>>(
+      table.applyAction(p2, { type: 'CALL' })
+    );
+
     expect(state.phase).toBe(TablePhase.Showdown);
     expect(state.communityCards).toHaveLength(5);
-    expect(state.pots.map((pot) => pot.total)).toEqual([60n, 60n, 50n]);
+    expect(state.pots.map((pot) => pot.total)).toEqual([60n, 60n]);
     expect(
       state.players.reduce((sum, player) => sum + player.stack, 0n)
     ).toBe(170n);

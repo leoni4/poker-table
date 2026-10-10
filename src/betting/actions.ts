@@ -118,6 +118,15 @@ function canPlayerRaise(tableState: TableState, playerId: PlayerId): boolean {
   return getCurrentBet(tableState) - actedAt.bet >= bettingRound.lastRaiseSize;
 }
 
+function hasOpponentWhoCanAct(
+  tableState: TableState,
+  playerId: PlayerId
+): boolean {
+  return tableState.players.some(
+    (p) => p.id !== playerId && p.status === PlayerStatus.Active && p.stack > 0n
+  );
+}
+
 /**
  * Determines which actions are available to a player
  *
@@ -148,6 +157,7 @@ export function getAvailableActions(
   const actions: PlayerActionType[] = [];
   const callAmount = getCallAmount(tableState, playerId);
   const currentBet = getCurrentBet(tableState);
+  const canBetOrRaise = hasOpponentWhoCanAct(tableState, playerId);
 
   // FOLD is always available when it's your turn (except when you can check)
   actions.push('FOLD');
@@ -169,6 +179,7 @@ export function getAvailableActions(
       ? tableState.bettingRound.minimumBet
       : undefined;
   if (
+    canBetOrRaise &&
     currentBet === 0n &&
     player.stack > 0n &&
     (minimumBet === undefined || player.stack >= minimumBet)
@@ -180,6 +191,7 @@ export function getAvailableActions(
   // both call it and add at least one full minimum raise increment.
   const minRaiseSize = getMinimumRaiseSize(tableState);
   if (
+    canBetOrRaise &&
     currentBet > 0n &&
     canPlayerRaise(tableState, playerId) &&
     player.stack >= callAmount + minRaiseSize
@@ -189,12 +201,13 @@ export function getAvailableActions(
 
   // ALL_IN may be a bet/raise or a short/exact call. If a short all-in raise
   // did not reopen betting for this player, an all-in raise is not legal, but
-  // an all-in call remains legal.
+  // an all-in call remains legal. With no opponent who can act, only the
+  // all-in call remains legal.
   if (
     player.stack > 0n &&
-    (currentBet === 0n ||
-      player.stack <= callAmount ||
-      canPlayerRaise(tableState, playerId))
+    (player.stack <= callAmount ||
+      (canBetOrRaise &&
+        (currentBet === 0n || canPlayerRaise(tableState, playerId))))
   ) {
     actions.push('ALL_IN');
   }
@@ -319,6 +332,15 @@ export function validateAction(
         );
       }
 
+      if (!hasOpponentWhoCanAct(tableState, playerId)) {
+        return err(
+          createError(
+            ErrorCode.INVALID_ACTION,
+            'Cannot BET because no opponent can act'
+          )
+        );
+      }
+
       // Bet amount must be provided
       if (action.amount === undefined || action.amount <= 0n) {
         return err(
@@ -371,6 +393,15 @@ export function validateAction(
           createError(
             ErrorCode.INVALID_ACTION,
             'Cannot RAISE because betting has not been reopened for this player'
+          )
+        );
+      }
+
+      if (!hasOpponentWhoCanAct(tableState, playerId)) {
+        return err(
+          createError(
+            ErrorCode.INVALID_ACTION,
+            'Cannot RAISE because no opponent can act'
           )
         );
       }
@@ -455,6 +486,18 @@ export function validateAction(
           createError(
             ErrorCode.INVALID_ACTION,
             'Cannot ALL_IN raise because betting has not been reopened for this player'
+          )
+        );
+      }
+
+      if (
+        player.stack > callAmount &&
+        !hasOpponentWhoCanAct(tableState, playerId)
+      ) {
+        return err(
+          createError(
+            ErrorCode.INVALID_ACTION,
+            'Cannot ALL_IN bet or raise because no opponent can act'
           )
         );
       }

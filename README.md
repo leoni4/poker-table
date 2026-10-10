@@ -462,6 +462,8 @@ const minRaiseSize = getMinimumRaiseSize(state);
 
 `BET` is only valid when the street has no current wager. `RAISE` is only valid when a wager already exists, and `RAISE.amount` is the **raise increment**, not the final total-to amount. Antes are dead money and are not part of `PlayerState.committed`. Short all-ins are represented with `ALL_IN`; they do not become a full raise unless they reach the current minimum raise rules.
 
+A bet or raise needs an opponent who can respond. When every other player still in the hand is all-in (no other `active` player has chips), the player to act gets no `BET` or `RAISE`, and `ALL_IN` is listed only when it is a call (stack ≤ call amount). For example, heads-up against an all-in shove the legal actions are `['FOLD', 'CALL']`. `validateAction` and `applyAction` reject `BET`, `RAISE`, and a bet- or raise-sized `ALL_IN` in this state with `INVALID_ACTION`.
+
 ## Hand Result
 
 The engine exposes the result it already computed at showdown, so consumers do not need to run their own hand evaluator:

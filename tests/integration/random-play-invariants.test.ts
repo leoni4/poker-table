@@ -239,6 +239,19 @@ function playTable(
         );
       }
 
+      const opponentCanAct = state.players.some(
+        (p) =>
+          p.id !== current && p.status === PlayerStatus.Active && p.stack > 0n
+      );
+      if (!opponentCanAct) {
+        check(
+          !available.includes('BET') &&
+            !available.includes('RAISE') &&
+            (!available.includes('ALL_IN') || me.stack <= call),
+          `${where}: aggression listed with no opponent able to act`
+        );
+      }
+
       const pool = available.flatMap((a) =>
         Array<PlayerActionType>(ACTION_WEIGHTS[a]).fill(a)
       );

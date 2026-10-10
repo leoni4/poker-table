@@ -383,8 +383,9 @@ describe('short all-in and reopening rules', () => {
   it('requires ALL_IN for an opening wager below the minimum bet', () => {
     const p1 = createPlayerId('short');
     const p2 = createPlayerId('deep');
+    const p3 = createPlayerId('other');
     const initial = state(
-      [player(p1, 0, 1n), player(p2, 1, 100n)],
+      [player(p1, 0, 1n), player(p2, 1, 100n), player(p3, 2, 100n)],
       p1
     );
     const started = startBettingRound(initial, p1, {

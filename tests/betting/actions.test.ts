@@ -140,6 +140,14 @@ describe('getAvailableActions', () => {
             status: PlayerStatus.Active,
             holeCards: {},
           },
+          {
+            id: createPlayerId('opponent'),
+            seat: 1,
+            stack: 1000n,
+            committed: 0n,
+            status: PlayerStatus.Active,
+            holeCards: {},
+          },
         ],
         currentPlayerId: createPlayerId('player1'),
       });
@@ -491,6 +499,14 @@ describe('validateAction', () => {
             status: PlayerStatus.Active,
             holeCards: {},
           },
+          {
+            id: createPlayerId('opponent'),
+            seat: 1,
+            stack: 1000n,
+            committed: 0n,
+            status: PlayerStatus.Active,
+            holeCards: {},
+          },
         ],
         currentPlayerId: createPlayerId('player1'),
       });
@@ -552,6 +568,14 @@ describe('validateAction', () => {
             status: PlayerStatus.Active,
             holeCards: {},
           },
+          {
+            id: createPlayerId('opponent'),
+            seat: 1,
+            stack: 1000n,
+            committed: 0n,
+            status: PlayerStatus.Active,
+            holeCards: {},
+          },
         ],
         currentPlayerId: createPlayerId('player1'),
       });
@@ -580,6 +604,14 @@ describe('validateAction', () => {
             status: PlayerStatus.Active,
             holeCards: {},
           },
+          {
+            id: createPlayerId('opponent'),
+            seat: 1,
+            stack: 1000n,
+            committed: 0n,
+            status: PlayerStatus.Active,
+            holeCards: {},
+          },
         ],
         currentPlayerId: createPlayerId('player1'),
       });
@@ -603,6 +635,14 @@ describe('validateAction', () => {
           {
             id: createPlayerId('player1'),
             seat: 0,
+            stack: 1000n,
+            committed: 0n,
+            status: PlayerStatus.Active,
+            holeCards: {},
+          },
+          {
+            id: createPlayerId('opponent'),
+            seat: 1,
             stack: 1000n,
             committed: 0n,
             status: PlayerStatus.Active,
@@ -846,6 +886,14 @@ describe('validateAction', () => {
             status: PlayerStatus.Active,
             holeCards: {},
           },
+          {
+            id: createPlayerId('opponent'),
+            seat: 1,
+            stack: 1000n,
+            committed: 0n,
+            status: PlayerStatus.Active,
+            holeCards: {},
+          },
         ],
         currentPlayerId: createPlayerId('player1'),
       });
@@ -867,6 +915,14 @@ describe('validateAction', () => {
             id: createPlayerId('player1'),
             seat: 0,
             stack: 500n,
+            committed: 0n,
+            status: PlayerStatus.Active,
+            holeCards: {},
+          },
+          {
+            id: createPlayerId('opponent'),
+            seat: 1,
+            stack: 1000n,
             committed: 0n,
             status: PlayerStatus.Active,
             holeCards: {},
@@ -1081,5 +1137,153 @@ describe('validateAction', () => {
         expect(result.error.code).toBe(ErrorCode.INVALID_STATE);
       }
     });
+  });
+});
+
+describe('when no opponent can act', () => {
+  function player(
+    id: string,
+    seat: number,
+    stack: bigint,
+    committed: bigint,
+    status: PlayerStatus
+  ): TableState['players'][number] {
+    return {
+      id: createPlayerId(id),
+      seat,
+      stack,
+      committed,
+      status,
+      holeCards: {},
+    };
+  }
+
+  function validate(tableState: TableState, action: PlayerAction) {
+    return validateAction(tableState, createPlayerId('hero'), action);
+  }
+
+  function expectInvalidAction(result: ReturnType<typeof validateAction>) {
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.code).toBe(ErrorCode.INVALID_ACTION);
+    }
+  }
+
+  const headsUpVersusAllIn = createTestTableState({
+    players: [
+      player('villain', 0, 0n, 50n, PlayerStatus.AllIn),
+      player('hero', 1, 1000n, 2n, PlayerStatus.Active),
+    ],
+    currentPlayerId: createPlayerId('hero'),
+  });
+
+  const threeWayVersusTwoAllIns = createTestTableState({
+    players: [
+      player('shortA', 0, 0n, 40n, PlayerStatus.AllIn),
+      player('shortB', 1, 0n, 80n, PlayerStatus.AllIn),
+      player('folded', 2, 500n, 0n, PlayerStatus.Folded),
+      player('hero', 3, 1000n, 10n, PlayerStatus.Active),
+    ],
+    currentPlayerId: createPlayerId('hero'),
+  });
+
+  it('lists only FOLD and CALL heads-up against an all-in', () => {
+    expect(
+      getAvailableActions(headsUpVersusAllIn, createPlayerId('hero'))
+    ).toEqual(['FOLD', 'CALL']);
+  });
+
+  it('lists ALL_IN as an all-in call when the stack does not cover the call', () => {
+    const tableState = createTestTableState({
+      players: [
+        player('villain', 0, 0n, 500n, PlayerStatus.AllIn),
+        player('hero', 1, 300n, 2n, PlayerStatus.Active),
+      ],
+      currentPlayerId: createPlayerId('hero'),
+    });
+
+    expect(getAvailableActions(tableState, createPlayerId('hero'))).toEqual([
+      'FOLD',
+      'CALL',
+      'ALL_IN',
+    ]);
+    expect(isOk(validate(tableState, { type: 'ALL_IN' }))).toBe(true);
+  });
+
+  it('lists no RAISE and no ALL_IN when the other players are all-in or folded', () => {
+    expect(
+      getAvailableActions(threeWayVersusTwoAllIns, createPlayerId('hero'))
+    ).toEqual(['FOLD', 'CALL']);
+  });
+
+  it('rejects RAISE and a raising ALL_IN with INVALID_ACTION', () => {
+    expectInvalidAction(
+      validate(threeWayVersusTwoAllIns, { type: 'RAISE', amount: 100n })
+    );
+    expectInvalidAction(validate(threeWayVersusTwoAllIns, { type: 'ALL_IN' }));
+    expectInvalidAction(
+      validate(headsUpVersusAllIn, { type: 'RAISE', amount: 48n })
+    );
+    expect(isOk(validate(threeWayVersusTwoAllIns, { type: 'CALL' }))).toBe(
+      true
+    );
+    expect(isOk(validate(threeWayVersusTwoAllIns, { type: 'FOLD' }))).toBe(
+      true
+    );
+  });
+
+  it('rejects BET and an opening ALL_IN when there is no wager', () => {
+    const tableState = createTestTableState({
+      phase: TablePhase.Flop,
+      players: [
+        player('villain', 0, 0n, 0n, PlayerStatus.AllIn),
+        player('hero', 1, 1000n, 0n, PlayerStatus.Active),
+      ],
+      currentPlayerId: createPlayerId('hero'),
+    });
+
+    expect(getAvailableActions(tableState, createPlayerId('hero'))).toEqual([
+      'FOLD',
+      'CHECK',
+    ]);
+    expectInvalidAction(validate(tableState, { type: 'BET', amount: 100n }));
+    expectInvalidAction(validate(tableState, { type: 'ALL_IN' }));
+  });
+
+  it('does not count an opponent with an empty stack as able to act', () => {
+    const tableState = createTestTableState({
+      players: [
+        player('villain', 0, 0n, 50n, PlayerStatus.Active),
+        player('hero', 1, 1000n, 2n, PlayerStatus.Active),
+      ],
+      currentPlayerId: createPlayerId('hero'),
+    });
+
+    expect(getAvailableActions(tableState, createPlayerId('hero'))).toEqual([
+      'FOLD',
+      'CALL',
+    ]);
+  });
+
+  it('keeps RAISE when another opponent can still act', () => {
+    const tableState = createTestTableState({
+      players: [
+        player('short', 0, 0n, 50n, PlayerStatus.AllIn),
+        player('deep', 1, 900n, 50n, PlayerStatus.Active),
+        player('hero', 2, 1000n, 2n, PlayerStatus.Active),
+      ],
+      currentPlayerId: createPlayerId('hero'),
+    });
+
+    expect(getAvailableActions(tableState, createPlayerId('hero'))).toEqual([
+      'FOLD',
+      'CALL',
+      'RAISE',
+      'ALL_IN',
+    ]);
+    expect(isOk(validate(tableState, { type: 'RAISE', amount: 50n }))).toBe(
+      true
+    );
+    expect(isOk(validate(tableState, { type: 'ALL_IN' }))).toBe(true);
   });
 });
